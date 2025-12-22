@@ -1,0 +1,91 @@
+use tta::tta::Msg;
+
+//============================================================
+// Integer Multiply-Accumulate (MAC)
+// - Operation: Acc = Acc + (OpA * OpB)
+// - Latency: 1 Cycle
+// - Precision: 32-bit Integer (Wrapping)
+//============================================================
+
+entity mac_fu(
+    clk: clock,
+    rst: bool,
+    set_op_a: Option<uint<32>>, // Set Operand A
+    trig: Option<uint<32>>,     // Set Operand B and Trigger MAC
+    clr: bool                   // Synchronous Clear of Accumulator
+) -> Option<uint<32>>
+{
+    // Stores the multiplier/multiplicand
+    reg(clk) op_a: uint<32> reset(rst: 0) = match set_op_a {
+        Some(val) => val,
+        None => op_a
+    };
+
+    // We calculate the next accumulator value combinatorially based on inputs
+    // and the current state of op_a and acc.
+    reg(clk) acc: uint<32> reset(rst: 0) = {
+        if clr {
+            0
+        } else {
+            match trig {
+                Some(op_b) => {
+                    // Explicitly truncate the 64-bit product to 32 bits
+                    // to perform wrapping arithmetic.
+                    let prod: uint<32> = trunc(op_a * op_b);
+                    trunc(acc + prod)
+                },
+                None => acc
+            }
+        }
+    };
+
+    // Returns Some(new_acc) in the cycle after the trigger.
+    reg(clk) res: Option<uint<32>> reset(rst: None) = {
+        if clr {
+            // If cleared, we can optionally output Some(0) or None.
+            // Returning Some(0) confirms the clear happened.
+            Some(0)
+        } else {
+            match trig {
+                Some(op_b) => {
+                    // Re-calculate sum for the output to meet 1-cycle latency
+                    let prod: uint<32> = trunc(op_a * op_b);
+                    Some(trunc(acc + prod))
+                },
+                None => None
+            }
+        }
+    };
+
+    res
+}
+
+// Bus helpers
+fn pick_mac_seta(m0: Option<Msg>, m1: Option<Msg>) -> Option<uint<32>> {
+    match m1 { 
+        Some(Msg::MAC_SetA(x)) => Some(x), 
+        _ => match m0 { 
+            Some(Msg::MAC_SetA(x)) => Some(x), 
+            _ => None 
+        } 
+    }
+}
+
+fn pick_mac_trig(m0: Option<Msg>, m1: Option<Msg>) -> Option<uint<32>> {
+    match m1 { 
+        Some(Msg::MAC_Trig(x)) => Some(x), 
+        _ => match m0 { 
+            Some(Msg::MAC_Trig(x)) => Some(x), 
+            _ => None 
+        } 
+    }
+}
+
+fn pick_mac_clear(m0: Option<Msg>, m1: Option<Msg>) -> bool {
+    match m1 { 
+        Some(Msg::MAC_Clear(x)) => x, 
+        _ => match m0 { 
+            Some(Msg::MAC_Clear(x)) => x, 
+            _ => false
+        } }
+}

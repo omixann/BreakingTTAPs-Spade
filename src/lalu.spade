@@ -1,0 +1,58 @@
+
+use tta::tta::Msg;
+
+//============================================================
+// Lightweight ALU functional unit
+// - Write LALU_OpA to set operand A
+// - Write *_Trig (with a value) to trigger operation
+// - LALU_Res holds result
+// - Only supports Add and Subtract (for pointer math)
+// - Latency: 1 Cycle
+//============================================================
+
+enum LAluOp { Add, Sub, }
+
+entity lalu_fu(
+  clk: clock, rst: bool,
+  set_op_a: Option<uint<32>>,
+  trig:     Option<(LAluOp, uint<32>)>
+) -> Option<uint<32>>
+{
+    // operand A
+    reg(clk) op_a: uint<32> reset(rst: 0) = match set_op_a {
+        Some(v) => v,
+        None    => op_a
+    };
+
+    // Combinational LALU core
+    let result: Option<uint<32>> = match trig {
+        Some((LAluOp::Add, b)) => Some(trunc(op_a + b)),
+        Some((LAluOp::Sub, b)) => Some(trunc(op_a - b)),
+        None                  => None
+    };
+
+    // Register the result (visible next cycle as LALU_Res)
+    reg(clk) res_reg: Option<uint<32>> reset(rst: None) = result;
+    res_reg
+}
+
+
+// Bus helpers
+fn pick_lalu_seta(m0: Option<Msg>, m1: Option<Msg>) -> Option<uint<32>> {
+    match m1 {
+        Some(Msg::LALU_SetA(x)) => Some(x),
+        _ => match m0 { 
+            Some(Msg::LALU_SetA(x)) => Some(x), 
+            _ => None }
+    }
+}
+
+fn pick_lalu_trig(m0: Option<Msg>, m1: Option<Msg>) -> Option<(LAluOp, uint<32>)> {
+    match m1 {
+        Some(Msg::LALU_Trig(op, x)) => Some((op, x)),
+        _ => match m0 { 
+            Some(Msg::LALU_Trig(op, x)) => Some((op, x)), 
+            _ => None 
+        }
+    }
+}

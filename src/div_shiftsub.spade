@@ -1,0 +1,113 @@
+use tta::tta::Msg;
+
+//============================================================
+// DIV - shift sub division FU
+// 
+// - OpA holds dividend, Trigger with divisor.
+// - Latency: 32 Cycles
+// - output in Div_Res. 
+// - Div_Res is undefined for all other cycles
+//============================================================
+
+
+enum State {
+    Idle,
+    Calc
+}
+
+struct DivRegs {
+    state: State,
+    dividend: uint<32>, // Shifts left, MSB feeds into remainder
+    divisor: uint<32>,  // Constant during Calc
+    remainder: uint<32>,// Working remainder
+    quotient: uint<32>, // Shifts left, LSB gets result bit
+    cnt: uint<6>        // 0..31
+}
+
+fn reset_div() -> DivRegs {
+    DivRegs(State::Idle, 0, 0, 0, 0, 0)
+}
+
+entity div_shiftsub_fu(
+  clk: clock, rst: bool,
+  set_op_a: Option<uint<32>>, // Dividend
+  trig:     Option<uint<32>>  // Divisor (Triggers start)
+) -> Option<uint<32>>         // Quotient
+{
+    reg(clk) r: DivRegs reset(rst: reset_div()) = match r.state {
+        State::Idle => {
+            // Logic similar to Multiplier: Update A if present, Start if Trig present
+            let next_dividend = match set_op_a {
+                Some(val) => val,
+                None => r.dividend
+            };
+
+            match trig {
+                Some(divisor) => DivRegs(State::Calc, next_dividend, divisor, 0, 0, 0),
+                None => DivRegs(State::Idle, next_dividend, 0, 0, 0, 0)
+            }
+        },
+        State::Calc => {
+            // Shift: Remainder gets MSB of Dividend. Dividend shifts left.
+            let msb_dividend = (r.dividend >> 31);
+            let rem_shifted = (r.remainder << 1) | msb_dividend;
+            let dvd_shifted = r.dividend << 1;
+
+            // Subtract: Check if we can subtract Divisor
+            let can_sub = rem_shifted >= r.divisor;
+            
+            // Update Remainder and Quotient Bit
+            let (next_rem, quot_bit) = if can_sub {
+                (trunc(rem_shifted - r.divisor), 1u32)
+            } else {
+                (rem_shifted, 0u32)
+            };
+
+            let next_quot = (r.quotient << 1) | quot_bit;
+
+            if r.cnt == 31 {
+                // Done. Return to Idle.
+                reset_div()
+            } else {
+                // Continue Loop
+                DivRegs(State::Calc, dvd_shifted, r.divisor, next_rem, next_quot, trunc(r.cnt + 1))
+            }
+        }
+    };
+
+    // --- Output Logic ---
+    // Valid only on the very last cycle of calculation (cnt == 31).
+    // We must re-calculate the final bit here because 'next_quot' from inside
+    // the register block is not visible in this scope.
+    match r.state {
+        State::Calc => {
+            if r.cnt == 31 {
+                // Re-calculate the final step to get the result this cycle
+                let msb_dividend = (r.dividend >> 31);
+                let rem_shifted = (r.remainder << 1) | msb_dividend;
+                let can_sub = rem_shifted >= r.divisor;
+                let quot_bit = if can_sub { 1u32 } else { 0u32 };
+                
+                Some((r.quotient << 1) | quot_bit)
+            } else {
+                None
+            }
+        },
+        _ => None
+    }
+}
+
+// Bus helpers
+fn pick_div_seta(m0: Option<Msg>, m1: Option<Msg>) -> Option<uint<32>> {
+  match m1 {
+    Some(Msg::DIV_SetA(x)) => Some(x),
+    _ => match m0 { Some(Msg::DIV_SetA(x)) => Some(x), _ => None }
+  }
+}
+
+fn pick_div_trig(m0: Option<Msg>, m1: Option<Msg>) -> Option<uint<32>> {
+  match m1 {
+    Some(Msg::DIV_Trig(x)) => Some(x),
+    _ => match m0 { Some(Msg::DIV_Trig(x)) => Some(x), _ => None }
+  }
+}

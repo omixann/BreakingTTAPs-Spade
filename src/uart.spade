@@ -1,0 +1,185 @@
+//============================================================
+// Simple UART Functional Unit (8N1)
+// - TX: Writes byte when `tx_data` is Some(byte).
+// - RX: Returns Some(byte) when data is received.
+// - Baud Rate: Controlled by `tick` input (16x oversampling recommended).
+//============================================================
+
+enum TxState {
+    Idle,
+    Start,
+    Data,
+    Stop
+}
+
+enum RxState {
+    Idle,
+    Start,
+    Data,
+    Stop
+}
+
+struct UartTx {
+    state: TxState,
+    sh: uint<8>,      // 8-bit register
+    bit_cnt: uint<4>, // Bits 0..7
+    tick_cnt: uint<4> // Sub-bit counter
+}
+
+struct UartRx {
+    state: RxState,
+    sh: uint<8>,      // Shift reg for data
+    bit_cnt: uint<3>, // Data bits 0..7
+    tick_cnt: uint<4> // Oversampling counter (0..15)
+}
+
+struct UartOutput {
+    tx_out: bool,
+    rx_data: Option<uint<8>>,
+    tx_busy: bool
+}
+
+entity uart_fu(
+    clk: clock,
+    rst: bool,
+    tick16: bool,              // 16x Baud Rate Pulse
+    rx_in: &bool,               // RX Pin
+    tx_data: &Option<uint<8>>   // Data to Transmit
+) -> UartOutput 
+{
+    // -----------------------------------------------------------------
+    // UART Transmitter (TX)
+    // -----------------------------------------------------------------
+    
+    reg(clk) tx: UartTx reset(rst: UartTx(TxState::Idle, 0, 0, 0)) = {
+        // Only advance logic on tick16 pulse
+        if tick16 {
+            let next_tick = trunc(tx.tick_cnt + 1);
+            let baud_tick = tx.tick_cnt == 15; // 1 full bit time
+
+            match tx.state {
+                TxState::Idle => {
+                    match *tx_data {
+                        Some(data) => {
+                            // Load data directly. LSB is at index 0.
+                            // Start bit is handled by state transition output.
+                            UartTx(TxState::Start, data, 0, 0)
+                        },
+                        None => tx
+                    }
+                },
+                TxState::Start => {
+                    if baud_tick {
+                        UartTx(TxState::Data, tx.sh, 0, 0)
+                    } else {
+                        UartTx(tx.state, tx.sh, tx.bit_cnt, next_tick)
+                    }
+                },
+                TxState::Data => {
+                    if baud_tick {
+                        // Data 0..7
+                        if tx.bit_cnt == 7 {
+                            UartTx(TxState::Stop, tx.sh, 0, 0)
+                        } else {
+                            UartTx(TxState::Data, tx.sh >> 1, trunc(tx.bit_cnt + 1), 0)
+                        }
+                    } else {
+                        UartTx(tx.state, tx.sh, tx.bit_cnt, next_tick)
+                    }
+                },
+                TxState::Stop => {
+                    if baud_tick {
+                        UartTx(TxState::Idle, 0, 0, 0)
+                    } else {
+                        UartTx(tx.state, tx.sh, tx.bit_cnt, next_tick)
+                    }
+                }
+            }
+        } else {
+            tx // No tick, hold state
+        }
+    };
+
+    // TX Output Logic
+    let tx_out = match tx.state {
+        TxState::Idle => true,   // Idle High
+        TxState::Start => false, // Start Low
+        TxState::Data => (tx.sh & 1) != 0, // LSB First
+        TxState::Stop => true    // Stop High
+    };
+    
+    let tx_busy = match tx.state {
+        TxState::Idle => false,
+        _ => true
+    };
+
+
+    // -----------------------------------------------------------------
+    // UART Receiver (RX)
+    // -----------------------------------------------------------------
+    reg(clk) rx_sync1: bool reset(rst: true) = *rx_in;
+    reg(clk) rx_sync2: bool reset(rst: true) = rx_sync1;
+    let rxd = rx_sync2;
+
+    reg(clk) rx: UartRx reset(rst: UartRx(RxState::Idle, 0, 0, 0)) = {
+        if tick16 {
+            match rx.state {
+                RxState::Idle => {
+                    if !rxd { // Start Bit Detected (Low)
+                        UartRx(RxState::Start, 0, 0, 0)
+                    } else {
+                        rx
+                    }
+                },
+                RxState::Start => {
+                    if rx.tick_cnt == 7 { // Middle of start bit
+                        if !rxd { // Valid Start
+                            UartRx(RxState::Data, 0, 0, 0)
+                        } else {
+                            UartRx(RxState::Idle, 0, 0, 0) // Noise
+                        }
+                    } else {
+                        UartRx(rx.state, rx.sh, rx.bit_cnt, trunc(rx.tick_cnt + 1))
+                    }
+                },
+                RxState::Data => {
+                    if rx.tick_cnt == 15 { 
+                        // Shift in LSB first logic: 
+                        // New bit goes to MSB, old bits shift right.
+                        // After 8 shifts, Bit0 is at LSB.
+                        let next_sh = (rx.sh >> 1) | (if rxd { 0x80 } else { 0 });
+                        
+                        if rx.bit_cnt == 7 {
+                            UartRx(RxState::Stop, next_sh, 0, 0)
+                        } else {
+                            UartRx(RxState::Data, next_sh, trunc(rx.bit_cnt + 1), 0)
+                        }
+                    } else {
+                        UartRx(rx.state, rx.sh, rx.bit_cnt, trunc(rx.tick_cnt + 1))
+                    }
+                },
+                RxState::Stop => {
+                    if rx.tick_cnt == 15 {
+                        // End of stop bit
+                        UartRx(RxState::Idle, rx.sh, 0, 0)
+                    } else {
+                        UartRx(rx.state, rx.sh, rx.bit_cnt, trunc(rx.tick_cnt + 1))
+                    }
+                }
+            }
+        } else {
+            rx
+        }
+    };
+
+    // RX Output Logic
+    // Emit data for exactly one cycle when finishing Stop state
+    let rx_valid = tick16 && match rx.state {
+        RxState::Stop => rx.tick_cnt == 15,
+        _ => false
+    };
+    
+    let rx_data = if rx_valid { Some(rx.sh) } else { None };
+
+    UartOutput(tx_out, rx_data, tx_busy)
+}

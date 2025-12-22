@@ -1,0 +1,45 @@
+//============================================================
+// Parallel Bootloader Interface
+// - Simple 8-bit parallel input with Strobe synchronization.
+// - Protocol: MCU sets data_in, then toggles strobe High.
+// - Logic: Detects rising edge of Strobe to latch data.
+// - I really hope this works, otherwise DOA!
+//============================================================
+
+struct ParallelRx {
+    last_clk_pin: bool, // For edge detection of the external clock
+    data: uint<8>       // Latched data
+}
+
+entity parallel_boot(
+    clk: clock,
+    rst: bool,
+    data_in: uint<8>,  // 8-bit Parallel Data Bus
+    strobe: bool,      // Data Ready/Valid Strobe
+    clk_pin: bool      // External Clock Pin from MCU
+) -> Option<uint<8>>   // Output: Some(byte) when data latched
+{
+    // Dual FF synchronizer to avoid metastability
+    reg(clk) clk_pin_s1: bool reset(rst: false) = clk_pin;
+    reg(clk) clk_pin_s2: bool reset(rst: false) = clk_pin_s1;
+    
+    // I don't think we have to register these, but doing it just to be safe
+    reg(clk) data_sync: uint<8> reset(rst: 0) = data_in;
+    reg(clk) strobe_sync: bool reset(rst: false) = strobe;
+
+    // State machine to track edges
+    reg(clk) rx: ParallelRx reset(rst: ParallelRx(false, 0)) = {
+        ParallelRx(clk_pin_s2, data_sync)
+    };
+
+    // Output Logic
+    // Detect Rising Edge of the External Clock Pin (0 -> 1)
+    let rising_edge = !rx.last_clk_pin && clk_pin_s2;
+    
+    // Valid transaction if Rising Edge AND Strobe is Active
+    if rising_edge && strobe_sync {
+        Some(rx.data)
+    } else {
+        None
+    }
+}

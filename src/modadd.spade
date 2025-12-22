@@ -1,0 +1,95 @@
+use tta::tta::Msg;
+
+//============================================================
+// Modulo-Add Functional Unit
+// - Operation: next_ptr = base | ((ptr + stride) & mask)
+// - Latency: 1 Cycle
+// - Handy for circular buffer math
+//============================================================
+
+entity modadd_fu(
+    clk: clock,
+    rst: bool,
+    set_base:    Option<uint<32>>, // Config: Base Address
+    set_mask:    Option<uint<32>>, // Config: Size Mask (must be 2^N - 1)
+    set_ptr:     Option<uint<32>>, // Set current pointer manually
+    trig_stride: Option<uint<32>>  // Trigger step with stride
+) -> Option<uint<32>>
+{
+    reg(clk) base: uint<32> reset(rst: 0) = match set_base {
+        Some(v) => v,
+        None => base
+    };
+
+    reg(clk) mask: uint<32> reset(rst: 0) = match set_mask {
+        Some(v) => v,
+        None => mask
+    };
+
+    // We determine the 'effective' current pointer for this cycle.
+    // If set_ptr is present, it overrides the internal register immediately.
+    reg(clk) ptr: uint<32> reset(rst: 0) = {
+        let current_ptr = match set_ptr {
+            Some(v) => v,
+            None => ptr
+        };
+
+        match trig_stride {
+            Some(stride) => {
+                // Calculate next step: base | ((ptr + stride) & mask)
+                // Here we rely on standard 32-bit wrapping add.
+                let offset = trunc(current_ptr + stride) & mask;
+                base | offset
+            },
+            None => current_ptr // No trigger: hold value (or update to set_ptr)
+        }
+    };
+
+    // Returns Some(next_ptr) next cycle if triggered.
+    reg(clk) res: Option<uint<32>> reset(rst: None) = {
+        let current_ptr = match set_ptr {
+            Some(v) => v,
+            None => ptr
+        };
+
+        match trig_stride {
+            Some(stride) => {
+                let offset = trunc(current_ptr + stride) & mask;
+                Some(base | offset)
+            },
+            None => None
+        }
+    };
+
+    res
+}
+
+// Bus helpers
+
+fn pick_base(m0: Option<Msg>, m1: Option<Msg>) -> Option<uint<32>> {
+    match m1 {
+        Some(Msg::MDA_Base(a)) => Some(a),
+        _ => match m0 { Some(Msg::MDA_Base(a)) => Some(a), _ => None }
+    }
+} 
+
+fn pick_mask(m0: Option<Msg>, m1: Option<Msg>) -> Option<uint<32>> {
+    match m1 {
+        Some(Msg::MDA_Mask(a)) => Some(a),
+        _ => match m0 { Some(Msg::MDA_Mask(a)) => Some(a), _ => None }
+    }
+} 
+
+fn pick_ptr(m0: Option<Msg>, m1: Option<Msg>) -> Option<uint<32>> {
+    match m1 {
+        Some(Msg::MDA_Ptr(a)) => Some(a),
+        _ => match m0 { Some(Msg::MDA_Ptr(a)) => Some(a), _ => None }
+    }
+} 
+
+fn pick_trig(m0: Option<Msg>, m1: Option<Msg>) -> Option<uint<32>> {
+    match m1 {
+        Some(Msg::MDA_Trig(a)) => Some(a),
+        _ => match m0 { Some(Msg::MDA_Trig(a)) => Some(a), _ => None }
+    }
+} 

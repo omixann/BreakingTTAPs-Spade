@@ -1,0 +1,145 @@
+mod alu;
+mod lalu;
+mod regfile;
+mod pc;
+mod sram;
+mod lsu;
+mod imem;
+mod bootloader;
+mod boot_imem_subsystem;
+mod gpo;
+mod gpi;
+mod uart_in;
+mod cmp;
+mod cmpz;
+mod spi_master;
+mod mul_shiftadd;
+mod bt;
+mod cc;
+mod fifo;
+mod spi;
+mod div_shiftsub;
+mod xorshift;
+mod mac;
+mod sel;
+mod modadd;
+mod tanh;
+mod stack_lsu;
+mod parallel_rx;
+mod uart;
+mod bit;
+mod tta;
+
+
+use tta::boot_imem_subsystem::SubsysOut;
+use tta::tta::Instr;
+use tta::tta::Move;
+use tta::tta::Src;
+use tta::tta::Dst;
+
+// Debug bundle the tests
+struct ChipDbg {
+  core_rst:   bool,
+  pc:         uint<10>,         // program counter
+  pc_release: Option<uint<10>>, // ignore
+  instr:      Option<Instr>,    // Instruction that was executed this cycle
+  gpo16:       uint<16>         // state of GPO
+}
+
+
+entity chip_top(
+  clk: clock,          // system clock
+  rst: bool,           // async reset (active-high)
+
+  uart_rx: &bool,       // UART RX (idle=1)
+  uart_tx: inv &bool,
+  uart_tick16: bool,    // needs 16x oversample tick
+
+  miso: &uint<1>,       // SPI
+  mosi: inv &uint<1>,
+
+  gpo16: inv &uint<16>,   // general purpose OUT pins
+  gpi16: &uint<16>,       // general purpose IN pins
+
+  parallel_in: &uint<8>,  // bootloader parallel port
+  parallel_strobe: bool,
+  parallel_clock: bool
+
+) -> ChipDbg
+{
+
+    // setup parallel port and read data for boot loading
+    let (pc_r, pc_w) = port;
+    let parallel_data = inst tta::parallel_rx::parallel_boot(clk, rst, *parallel_in, parallel_strobe, parallel_clock);
+
+
+    // For 20MHz clk -> 1MHz SCLK (div by 10 gives 2MHz tick)
+    let (mosi_r, mosi_w) = port;
+    let tick = inst tick_generator(clk, rst, 10);
+    let spi_data = inst tta::spi_master::spi_master(clk, rst, tick, miso, mosi_r);
+    set mosi = &spi_data.mosi;
+    let spi_busy = !spi_data.cs;
+
+    let (uart_tx_r, uart_tx_w) = port;
+    let uart_out = inst tta::uart::uart_fu(clk, rst, uart_tick16, uart_rx, uart_tx_r);
+    set uart_tx = &uart_out.tx_out;
+
+    let subsys: SubsysOut = inst tta::boot_imem_subsystem::boot_imem_sub(
+        clk, rst,
+        parallel_data,
+        pc_r
+    );
+
+
+    reg(clk) released: bool reset(rst: false) = match (subsys.pc_release, released) {
+      (Some(v), _) => true,   // release pulse
+      (None, true) => true,   // previously released
+      (_, _) => false         // all else
+    };
+
+    let instr = match (released) {
+      true => subsys.instr,
+      false => noop()
+    };
+
+    
+    let tta_out = inst tta::tta(
+        clk,
+        !released,
+        instr,
+        pc_w,
+        *gpi16,
+        uart_out.rx_data,
+        uart_tx_w,
+        uart_out.tx_busy,
+        spi_data.rx,
+        mosi_w,
+        spi_busy
+    );
+    set gpo16 = &tta_out.gpo16;
+      
+    // Return debug fields for tests
+    ChipDbg(
+        subsys.core_rst,
+        tta_out.pc_val,
+        subsys.pc_release,
+        tta_out.instruction,   
+        tta_out.gpo16
+    )
+}
+
+
+fn noop() -> Instr {
+  Instr(
+          Move(Src::Zero, Dst::ALU_Add_Trig, false),  //noop
+          Move(Src::Zero, Dst::ALU_Add_Trig, false)   //noop
+      )
+}
+
+// Generates a single-cycle pulse every 'period' cycles
+entity tick_generator(clk: clock, rst: bool, period: uint<16>) -> bool {
+    reg(clk) count reset(rst: 0) = 
+        if count == period - 1 { 0 } else { trunc(count + 1) };
+        
+    count == 0
+}

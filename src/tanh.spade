@@ -1,0 +1,75 @@
+use tta::tta::Msg;
+
+//============================================================
+// Piecewise-Linear Tanh Functional Unit (Symmetric)
+// - Format: Q1.15 Fixed Point stored in uint<32>
+// - Input: uint<32> (lower 16 bits interpreted as Q1.15)
+// - Output: uint<32> (result sign-extended to 32 bits)
+// - Scale: 1.0 approx 32768
+// - Latency: 1 cycle
+//============================================================
+
+entity tanh_pwl_fu(
+    clk: clock,
+    rst: bool,
+    trig: Option<uint<32>> // Input X (uint<32> carrying Q1.15)
+) -> Option<uint<32>>      // Output Y (uint<32> carrying Q1.15)
+{
+    reg(clk) res: Option<uint<32>> reset(rst: None) = match trig {
+        Some(val_32) => {
+            // Extract bottom 16 bits (uint<16>) and reinterpret bits as signed (int<16>)
+            let val_u16: uint<16> = trunc(val_32);
+            let x: int<16> = val_u16.to_int();
+            // Expand to 17 bits to safely handle abs(MIN_INT) i.e. abs(-32768) which is +32768
+            let x_17: int<17> = sext(x);
+            let is_neg = x_17 < 0;
+            
+            // 0 - x_17 produces int<18> (one bit growth on sub)
+            let abs_x_18: int<18> = if is_neg { 0 - sext(x_17) } else { sext(x_17) };
+            let abs_x: int<17> = trunc(abs_x_18);
+
+            // Piecewise Logic
+            // Threshold 0.5 = 16384 (Q1.15)
+            // We calculate in 17 bits to avoid overflow during the check.
+            let abs_y: int<17> = if abs_x < 16384 {
+                abs_x
+            } else {
+                // y = 0.5 * x + 0.25
+                // 0.25 = 8192
+                // Slope 0.5 is right shift 1.
+                // (abs_x >> 1) is int<17>.
+                // Adding 8192 might overflow 17 bits if x is large (e.g. x=32768 -> 16384+8192 = 24576).
+                // 24576 fits in 17 bits (max 65535), so int<17> is sufficient, but addition grows to 18.
+                // We perform addition in 18 bits then truncate.
+                let term1: int<18> = sext(abs_x >> 1);
+                let term2: int<18> = 8192;
+                trunc(term1 + term2)
+            };
+
+            // If original was negative, flip the result back.
+            // 0 - abs_y produces int<18>.
+            let y_18: int<18> = if is_neg { 0 - sext(abs_y) } else { sext(abs_y) };
+            
+            // Truncate back to 16 bits for the Q1.15 result container.
+            // Max result is ~0.75 (24576), which fits easily in int<16> (max 32767).
+            let y_16: int<16> = trunc(y_18);
+
+            // Sign-extend int<16> to int<32> to preserve value on 32-bit bus,
+            // then bitcast to uint<32> for the interface.
+            let y_i32: int<32> = sext(y_16);
+            Some(y_i32.to_uint())
+        },
+        None => None
+    };
+
+    res
+}
+
+// Bus helper
+
+fn pick_trig(m0: Option<Msg>, m1: Option<Msg>) -> Option<uint<32>> {
+    match m1 {
+        Some(Msg::TNH_Trig(a)) => Some(a),
+        _ => match m0 { Some(Msg::TNH_Trig(a)) => Some(a), _ => None }
+    }
+} 

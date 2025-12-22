@@ -1,0 +1,88 @@
+use tta::sram;
+use tta::tta::Msg;
+
+//============================================================
+// Stack Load/Store Unit
+// - 256b stack (32b word)
+// - set_sp to desired positoin
+// - pop_trig to pop a value off the stack
+// - push_trig to push a value onto the stack
+// - Push takes precedence over Pop
+// - Latency: 1 cycle
+//============================================================
+
+entity stack_lsu_fu(
+    clk: clock,
+    rst: bool,
+    set_sp: Option<uint<32>>,    // Initialize Stack Pointer
+    pop_trig: bool,              // Trigger Pop
+    push_trig: Option<uint<32>>  // Trigger Push
+) -> Option<uint<32>>
+{
+    reg(clk) sp: uint<32> reset(rst: 0) = {
+        match set_sp {
+            Some(val) => val,
+            None => {
+                if match push_trig { Some(_) => true, None => false } {
+                    trunc(sp - 1) 
+                } else if pop_trig {
+                    trunc(sp + 1) 
+                } else {
+                    sp
+                }
+            }
+        }
+    };
+
+    let (addr, wren, wdata) = match push_trig {
+        Some(val) => {
+            let trunc_sp: uint<8> = trunc(sp-1);
+            (trunc_sp, true, val)
+        },
+        None => {
+            // Pop: Read from current SP
+            let trunc_sp: uint<8> = trunc(sp-1);
+            (trunc_sp, false, 0)
+        }
+    };
+
+    let rdata = inst sram::stack_ram_256x32(clk, rst, addr, wren, wdata);
+
+    reg(clk) pop_valid: bool reset(rst: false) = pop_trig && match push_trig {
+        Some(_) => false,
+        None => true
+    };
+
+    if pop_valid { Some(rdata) } else { None }
+}
+
+// Bus helpers
+
+fn pick_seta(m0: Option<Msg>, m1: Option<Msg>) -> Option<uint<32>> {
+    match m1 { 
+        Some(Msg::Stack_SetA(x)) => Some(x), 
+        _ => match m0 { 
+            Some(Msg::Stack_SetA(x)) => Some(x), 
+            _ => None 
+        } 
+    }
+}
+
+fn pick_push_trig(m0: Option<Msg>, m1: Option<Msg>) -> Option<uint<32>> {
+    match m1 { 
+        Some(Msg::Stack_Push_Trig(x)) => Some(x), 
+        _ => match m0 { 
+            Some(Msg::Stack_Push_Trig(x)) => Some(x), 
+            _ => None 
+        } 
+    }
+}
+
+fn pick_pop_trig(m0: Option<Msg>, m1: Option<Msg>) -> bool {
+    match m1 { 
+        Some(Msg::Stack_Pop_Trig) => true, 
+        _ => match m0 { 
+            Some(Msg::Stack_Pop_Trig) => true, 
+            _ => false 
+        } }
+}

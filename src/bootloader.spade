@@ -1,0 +1,154 @@
+//============================================================
+// Bootloader FSM: consumes bytes, writes IMEM banks, gates CPU reset
+//============================================================
+enum BL {
+  WaitB, WaitT,
+  Ver0, Ver1,
+  N0, N1,
+  E0, E1,
+  W0_B0, W0_B1, W0_B2, W0_B3,
+  W1_B0, W1_B1, W1_B2, W1_B3,
+  Commit, Done
+}
+
+/*
+//============================================================
+Byte Stream Format (v1)
+//============================================================
+
+'B' 'T'         // 0x42 0x54 (magic)
+u16 version     // little-endian (0x0001)
+u16 instr_cnt   // N <= 1024 (clamped if over)
+u16 entry_pc    // where to jump when done. This is probably buggy and should be ignored
+repeat N {
+  u32 slot0_word;   // little-endian
+  u32 slot1_word;   // little-endian
+}
+
+
+//============================================================
+//State machine
+//============================================================
+WaitB → WaitT → Ver0 → Ver1 → N0 → N1 → E0 → E1
+                                      │
+                                      └── if N==0 → Done
+E1 → W0_B0 → W0_B1 → W0_B2 → W0_B3 → W1_B0 → W1_B1 → W1_B2 → W1_B3 → Commit
+                                                                         │
+                                                                         └── if more → W0_B0
+                                                                         └── else     Done
+
+*/
+
+struct State {
+    step: BL,         // current state machine step
+    ver: uint<16>,    // version
+    nleft: uint<16>,  // number of instructions left
+    entry: uint<10>,  // 
+    pcw: uint<10>,    // write address (instr index)
+
+    // shifters for slot words
+    w0: uint<32>,
+    w1: uint<32> 
+}
+
+struct LoaderOutput {
+    boot_active: bool,              // hold CPU in reset while 1
+    wr_addr: Option<uint<10>>,      // instruction index
+    wr_slot0:  Option<uint<32>>,    // word for slot0
+    wr_slot1:  Option<uint<32>>,    // word for slot1
+    release_pc:  Option<uint<10>>   // Some(entry) when done
+}
+
+fn reset_state() -> State {
+    State(BL::WaitB, 0,0,0,0,0,0)
+}
+
+entity bootloader(
+  clk: clock, rst: bool,
+  byte_valid: bool,         // strobed high when this is a valid byte to consume
+  byte: uint<8>
+) -> LoaderOutput {
+
+    // State Machine
+    reg(clk) st: State reset(rst: reset_state()) = {
+        match (byte_valid, st.step) {
+            (true, BL::WaitB) => if byte == 0x42u8 { 
+                    State(BL::WaitT, st.ver, st.nleft, st.entry, st.pcw, st.w0, st.w1) 
+                } else { 
+                    reset_state()
+                },
+            (true, BL::WaitT) => if byte == 0x54u8 { 
+                    State(BL::Ver0, st.ver, st.nleft, st.entry, st.pcw, st.w0, st.w1) 
+                } else { 
+                    reset_state()
+                },
+            (true, BL::Ver0) => State(BL::Ver1, zext(byte), st.nleft, st.entry, st.pcw, st.w0, st.w1),
+            (true, BL::Ver1) => {
+                    let v = (zext(byte) << 8) | st.ver;
+                    if v == 0x0001u16 { 
+                        State(BL::N0, trunc(v), st.nleft, st.entry, st.pcw, st.w0, st.w1)
+                    } else { 
+                        reset_state()
+                    }
+                },
+            (true, BL::N0) => State(BL::N1, st.ver, zext(byte), st.entry, st.pcw, st.w0, st.w1),
+            (true, BL::N1) => {
+                    let n = (zext(byte) << 8) | st.nleft; // little-endian
+                    let n_clamped = if n > 1024u16 { 1024u16 } else { n };
+                    State(BL::E0, st.ver, trunc(n_clamped), st.entry, st.pcw, st.w0, st.w1)
+                },
+            (true, BL::E0) => State(BL::E1, st.ver, st.nleft, zext(byte), st.pcw, st.w0, st.w1),
+            (true, BL::E1) => {
+                    let e = (zext(byte) << 8) | st.entry;
+                    if st.nleft == 0u16 { 
+                        State(BL::Done, st.ver, st.nleft, trunc(e), st.pcw, st.w0, st.w1) 
+                    } else { 
+                        State(BL::W0_B0, st.ver, st.nleft, trunc(e), st.pcw, st.w0, st.w1)
+                    }
+                },
+
+            // collect slot0 word (little-endian)
+            (true, BL::W0_B0) => State(BL::W0_B1, st.ver, st.nleft, st.entry, st.pcw, trunc(zext(byte)         | (st.w0 & 0xFFFFFF00)), st.w1),
+            (true, BL::W0_B1) => State(BL::W0_B2, st.ver, st.nleft, st.entry, st.pcw, trunc((zext(byte) << 8)  | (st.w0 & 0xFFFF00FF)), st.w1),
+            (true, BL::W0_B2) => State(BL::W0_B3, st.ver, st.nleft, st.entry, st.pcw, trunc((zext(byte) << 16) | (st.w0 & 0xFF00FFFF)), st.w1),
+            (true, BL::W0_B3) => State(BL::W1_B0, st.ver, st.nleft, st.entry, st.pcw, trunc((zext(byte) << 24) | (st.w0 & 0x00FFFFFF)), st.w1),
+
+            // collect slot1 word
+            (true, BL::W1_B0) => State(BL::W1_B1, st.ver, st.nleft, st.entry, st.pcw, st.w0, trunc(zext(byte)          | (st.w1 & 0xFFFFFF00))),
+            (true, BL::W1_B1) => State(BL::W1_B2, st.ver, st.nleft, st.entry, st.pcw, st.w0, trunc((zext(byte) << 8)   | (st.w1 & 0xFFFF00FF))),
+            (true, BL::W1_B2) => State(BL::W1_B3, st.ver, st.nleft, st.entry, st.pcw, st.w0, trunc((zext(byte) << 16)  | (st.w1 & 0xFF00FFFF))),
+            (true, BL::W1_B3) => State(BL::Commit, st.ver, st.nleft, st.entry, st.pcw, st.w0, trunc((zext(byte) << 24) | (st.w1 & 0x00FFFFFF))),
+
+            // write both words to IMEM and advance
+            // Commit doesn't care about a valid byte
+            (_, BL::Commit) => {    
+                let pcw1 = trunc(st.pcw + 1);   // increment program counter
+                let n1   = trunc(st.nleft - 1); // decrement number of instructions left
+                let next = if n1 == 0u16 { 
+                    BL::Done
+                } else { 
+                    BL::W0_B0
+                };
+                State(next, st.ver, n1, st.entry, pcw1, st.w0, st.w1)
+            },
+
+            // Done doesn't care about a valid byte
+            (_, BL::Done) => st,
+
+            // invalid bytes return prior state
+            (false, _) => st
+        }
+    };
+
+    let (wr_addr, wr_slot0, wr_slot1) = match st.step {
+        BL::Commit => (Some(st.pcw), Some(st.w0), Some(st.w1)),
+        _ => (None, None, None)
+    };
+
+    let (boot_active, release_pc) = match st.step { // TODO tidy this up with just one Option
+        BL::Done => (false, Some(st.entry)),
+        _ => (true, None)
+    };
+
+    LoaderOutput(boot_active, wr_addr, wr_slot0, wr_slot1, release_pc)
+}

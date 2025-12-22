@@ -1,0 +1,65 @@
+use tta::tta::Msg;
+
+//============================================================
+// Conditional Move (SEL) Functional Unit
+// - Operation: Out = if cond { A } else { B }
+// - Trigger with B
+// - Latency: 1 Cycle
+//============================================================
+
+entity sel_fu(
+    clk: clock,
+    rst: bool,
+    set_cond: Option<bool>,    // Set Condition Flag
+    set_a: Option<uint<32>>,   // Set 'True' Path Value (A)
+    trig_b: Option<uint<32>>   // Set 'False' Path Value (B) and Trigger
+) -> Option<uint<32>>
+{
+    reg(clk) cond: bool reset(rst: false) = match set_cond {
+        Some(c) => c,
+        None => cond
+    };
+
+    reg(clk) val_a: uint<32> reset(rst: 0) = match set_a {
+        Some(v) => v,
+        None => val_a
+    };
+
+    // If trig_b is present, we select between val_a and b input
+    // based on the stored condition.
+    reg(clk) res: Option<uint<32>> reset(rst: None) = match trig_b {
+        Some(val_b) => {
+            if cond {
+                Some(val_a)
+            } else {
+                Some(val_b)
+            }
+        },
+        None => None
+    };
+
+    res
+}
+
+// Bus helpers
+
+fn pick_sel_cond(m0: Option<Msg>, m1: Option<Msg>) -> Option<bool> {
+    match m1 {
+        Some(Msg::SEL_Cond(a)) => Some(a),
+        _ => match m0 { Some(Msg::SEL_Cond(a)) => Some(a), _ => None }
+    }
+} 
+
+fn pick_sel_seta(m0: Option<Msg>, m1: Option<Msg>) -> Option<uint<32>> {
+    match m1 {
+        Some(Msg::SEL_SetA(a)) => Some(a),
+        _ => match m0 { Some(Msg::SEL_SetA(a)) => Some(a), _ => None }
+    }
+} 
+
+fn pick_sel_trigb(m0: Option<Msg>, m1: Option<Msg>) -> Option<uint<32>> {
+    match m1 {
+        Some(Msg::SEL_TrigB(a)) => Some(a),
+        _ => match m0 { Some(Msg::SEL_TrigB(a)) => Some(a), _ => None }
+    }
+} 

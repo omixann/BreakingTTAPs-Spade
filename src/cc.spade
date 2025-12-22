@@ -1,0 +1,21 @@
+
+
+//============================================================
+// Clock Counter
+//
+// u64 that counts up from zero as soon as boot is released
+// can be fetched with CC_Res_Lo and CC_Res_High (low and high
+// bits of counter respectively)
+//============================================================
+entity cc_fu(
+  clk: clock, rst: bool
+) -> (uint<32>, uint<32>)
+{
+    reg(clk) counter: uint<51> reset(rst: 0) = trunc(counter + 1);
+
+    let padded: uint<64> = zext(counter);
+    let cc_res_lo: uint<32> = trunc(padded & 0xFFFF_FFFF);           // low  32 bits
+    let cc_res_high: uint<32> = trunc(padded >> 32);                 // high 32 bits (logical shift) 
+    (cc_res_lo, cc_res_high)
+}
+

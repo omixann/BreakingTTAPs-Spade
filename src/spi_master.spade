@@ -1,0 +1,113 @@
+//============================================================
+// SPI Master Controller (Mode 0: CPOL=0, CPHA=0)
+//
+// I have little faith that this works :(
+//============================================================
+
+enum State {
+    Idle,
+    Transfer
+}
+
+struct SPI {
+    state: State,
+    cnt: uint<5>,      // Counts ticks 0..16 (2 ticks per bit)
+    sh: uint<8>,       // Shift register (TX and RX)
+    sample: uint<1>       // Buffer to hold MISO sampled at rising edge
+}
+
+struct SpiOutput {
+    cs: bool,
+    sclk: bool,
+    mosi: uint<1>,
+    rx: Option<uint<8>>
+}
+
+// Helper to initialize the state machine
+fn reset_spi() -> SPI {
+    SPI(State::Idle, 0, 0, 0)
+}
+
+entity spi_master(
+    clk: clock,
+    rst: bool,
+    tick: bool,                   // Enable pulse (2x SCLK frequency)
+    miso: &uint<1>,
+    start_tx: &Option<uint<8>>     // Input: Some(byte) to start transaction
+) -> SpiOutput
+{
+    reg(clk) r: SPI reset(rst: reset_spi()) =
+        if tick {
+            match r.state {
+                State::Idle => {
+                    match *start_tx {
+                        // Start command received: Load data, assert CS (via state change), reset counters
+                        Some(data) => SPI(State::Transfer, 0, data, 0),
+                        None => r
+                    }
+                },
+                State::Transfer => {
+                    // cnt runs 0..16.
+                    // Odd counts (1, 3...15) -> SCLK Rising Edge (Sample MISO)
+                    // Even counts (2, 4...16) -> SCLK Falling Edge (Shift data)
+                    let new_cnt = trunc(r.cnt + 1);
+
+                    if r.cnt == 16 {
+                        // Transaction complete, return to Idle
+                        // Note: rx data is extracted from 'r.sh' in the output logic below
+                        SPI(State::Idle, 0, r.sh, 0)
+                    }
+                    else if (new_cnt % 2) != 0 {
+                        // Rising Edge (Odd cnt): Sample MISO
+                        // We store it in 'sample' until the falling edge shift
+                        SPI(State::Transfer, new_cnt, r.sh, *miso)
+                    }
+                    else {
+                        // Falling Edge (Even cnt): Shift Left
+                        // Shift in the previously sampled bit into LSB
+                        let next_sh = (r.sh << 1) | zext(r.sample);
+                        SPI(State::Transfer, new_cnt, next_sh, r.sample)
+                    }
+                }
+            }
+        } else {
+            r
+        };
+
+    // --- Output Logic ---
+
+    // CS is Active Low. It is low only during Transfer state.
+    // Note: We keep it low until the very last tick (16) completes.
+    let cs = match r.state {
+        State::Idle => true,
+        State::Transfer => false
+    };
+
+    // SCLK Generation (Mode 0: Idle Low)
+    // High during the middle of the bit (Odd counts: 1, 3, 5...)
+    let sclk = match r.state {
+        State::Transfer => (r.cnt % 2) != 0, // 1=High, 2=Low, etc.
+        State::Idle => false
+    };
+
+    // MOSI is the MSB of the shift register.
+    // In Mode 0, data must be valid before the first rising edge.
+    // Since we load 'sh' on the transition to Transfer, MSB is ready at count 0.
+    let mosi = match (r.sh >> 7) != 0 {
+        true => 1,
+        false => 0
+    };
+
+    // RX Ready Pulse
+    // Return Some(byte) exactly when we transition from Transfer back to Idle (tick && cnt==16)
+    let rx_val = if tick && (r.cnt == 16) {
+        // The last shift happened at cnt 16 transition (when cnt went 15->16).
+        // r.sh now contains the fully shifted byte. We just return it.
+        Some(r.sh)
+    } else {
+        None
+    };
+
+    SpiOutput(cs, sclk, mosi, rx_val)
+}
+

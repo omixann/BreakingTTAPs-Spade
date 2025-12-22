@@ -1,0 +1,18 @@
+//============================================================
+// General purpose input
+// Input pins are directly mapped to bits of `pins` u16
+// Uses a dual flip-flop synchronizer so input values are two
+// cycles delayed
+//============================================================
+
+entity gpi16(
+  clk: clock, rst: bool,
+  pins: uint<16>          
+) -> Option<uint<32>>           
+{
+  // 2-FF synchronizer
+  // Not actually sure if this is necessary?
+  reg(clk) s1: uint<32> reset(rst: 0) = zext(pins);
+  reg(clk) s2: uint<32> reset(rst: 0) = s1;
+  Some(s2)
+}

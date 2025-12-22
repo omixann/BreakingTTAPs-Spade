@@ -1,0 +1,83 @@
+use tta::tta::Instr;
+use tta::tta::Move;
+use tta::tta::Src;
+use tta::tta::Dst;
+
+//============================================================
+// boot_imem_subsystem
+// - Bridges external RX into the bootloader, writes IMEM,
+//   and serves decoded instructions to the core.
+// - Holds the core in reset while booting and emits a one-shot
+//   PC release pulse with the entry address when done.
+//   Pretty sure PC release value is incorrect/ buggy and should be ignored 
+//============================================================
+
+struct SubsysOut {
+  core_rst:   bool,             // rst || boot_active
+  instr:      Instr,            // decoded instruction at fetch_pc (1c latency from IMEM)
+  pc_release: Option<uint<10>>  // TODO this isn't really used anymore, should remove
+}
+
+entity boot_imem_sub(
+  clk: clock, rst: bool,
+
+  // UART or SPI data
+  rx_opt: Option<uint<8>>,
+
+  // From core
+  fetch_pc:   &uint<10>  // program counter for instruction fetch
+) -> SubsysOut
+{
+
+  // TODO can probably just pass the option through instead of mapping to bool
+  let (byte_valid, byte) =
+    match rx_opt {
+      Some(b) => (true, b),
+      None    => (false, 0u8)
+    };
+
+  // ---------------- Bootloader ----------------
+  // Produces 1-cycle pulses for IMEM writes and keeps CPU in reset until Done.
+  let bl = inst tta::bootloader::bootloader(clk, rst, byte_valid, byte);
+
+  // Core reset gating
+  let core_rst = rst || bl.boot_active;
+
+  // One-shot the PC release at end of boot (falling edge of boot_active)
+  reg(clk) boot_q: bool reset(rst:true) = bl.boot_active;
+  let boot_fall: bool = boot_q && !bl.boot_active;
+
+  let pc_release: Option<uint<10>> =
+    match (boot_fall, bl.release_pc) {
+      (true, Some(e)) => Some(e),   // one-cycle pulse
+      _                => None
+    };
+
+  // ---------------- IMEM ----------------
+  // Boot writes go straight in; in run mode we present fetch_pc.
+  // NOTE: imem has a 1-cycle read latency on fetch path.
+  let instr = match boot_q {
+    true => no_op(),  
+    false => {
+      match inst tta::imem::imem(
+          clk, rst,
+          boot_q,        // boot_mode
+          *fetch_pc,     // read address (from core)
+          bl.wr_addr, bl.wr_slot0, bl.wr_slot1
+        ) {
+          Some(v) => v,
+          None => no_op()
+        }
+    }
+  };
+
+  SubsysOut(core_rst, instr, pc_release)
+}
+
+
+fn no_op() -> Instr {
+  Instr(
+          Move(Src::Zero, Dst::ALU_Add_Trig, false),
+          Move(Src::Zero, Dst::ALU_Add_Trig, false)
+        )
+}

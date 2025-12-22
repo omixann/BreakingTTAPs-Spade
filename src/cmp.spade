@@ -1,0 +1,88 @@
+use tta::tta::Msg;
+
+//============================================================
+// cmp: two-operand comparisons with boolean (0/1) result
+// - set_op_a with LH
+// - trigger with RH
+// - CMP_Res holds boolean result
+// - Latency: 1 Cycle
+//============================================================
+
+enum CmpOp { 
+    Eq,     // A == B
+    Neq,    // A != B
+    Slt,    // signed A <  B
+    Sle,    // signed A <= B
+    Ult,    // unsigned A <  B
+    Ule     // unsigned A <= B
+}
+
+
+entity cmp_fu(
+  clk: clock, rst: bool,
+  set_op_a: Option<uint<32>>,
+  trig:    Option<(CmpOp, uint<32>)>
+) -> Option<uint<32>>
+{
+    // operand A
+    reg(clk) a: uint<32> reset(rst: 0) = match set_op_a {
+        Some(v) => v,
+        None    => a
+    };
+
+    // Combinational Cmp core
+    let result: Option<uint<32>> = match trig {
+        Some((CmpOp::Eq, b))   => Some(to_u32(a == b)),
+        Some((CmpOp::Neq, b))  => Some(to_u32(a != b)),
+        Some((CmpOp::Slt, b))  => Some(to_u32(signed_lt(a, b))),
+        Some((CmpOp::Sle,  b)) => Some(to_u32(signed_lt(a, b) || (a == b))),
+        Some((CmpOp::Ult, b))  => Some(to_u32(a < b)),
+        Some((CmpOp::Ule, b))  => Some(to_u32((a < b) || (a == b))),
+        None                   => None
+    };
+
+    // Register the result (visible next cycle as Cmp_Res)
+    reg(clk) res_reg: Option<uint<32>> reset(rst: None) = result;
+    res_reg
+}
+
+// Bus helpers
+
+fn pick_cmp_seta(m0: Option<Msg>, m1: Option<Msg>) -> Option<uint<32>> {
+    match m1 {
+        Some(Msg::Cmp_SetA(x)) => Some(x),
+        _ => match m0 { 
+            Some(Msg::Cmp_SetA(x)) => Some(x), 
+            _ => None }
+    }
+}
+
+fn pick_cmp_trig(m0: Option<Msg>, m1: Option<Msg>) -> Option<(CmpOp, uint<32>)> {
+    match m1 {
+        Some(Msg::Cmp_Trig(op, x)) => Some((op, x)),
+        _ => match m0 { 
+            Some(Msg::Cmp_Trig(op, x)) => Some((op, x)), 
+            _ => None 
+        }
+    }
+}
+
+// convert bool to u32
+fn to_u32(x: bool) -> uint<32> { 
+    if x { 
+        1u32 
+    } else { 
+        0u32 
+    } 
+}
+
+// Signed less-than helper (twos-complement) without casting
+fn signed_lt(a: uint<32>, b: uint<32>) -> bool {
+    let sa: uint<1> = trunc((a >> 31) & 1u32);
+    let sb: uint<1> = trunc((b >> 31) & 1u32);
+    if sa != sb { 
+        sa == 1u1 
+    } else { 
+        a < b 
+    }
+}

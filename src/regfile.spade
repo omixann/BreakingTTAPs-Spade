@@ -1,0 +1,110 @@
+use tta::tta::Msg;
+
+//============================================================
+// Register file: 16 x 32, 2 read ports + 2 writes per cycle
+// - Reads are combinational (rd0/rd1 from current state)
+// - Writes are applied on the next clock edge
+// - WR1 has priority over WR0
+//============================================================
+
+struct RegisterReadValues {
+    rd0: uint<32>,
+    rd1: uint<32>
+}
+
+entity regfile8_fu(
+  clk: clock, rst: bool,
+  // write intents for this cycle (applied on next edge)
+  wr0: Option<(uint<4>, uint<32>)>,
+  wr1: Option<(uint<4>, uint<32>)>,
+  // read addresses for this cycle
+  ra0: uint<4>, ra1: uint<4>
+) -> RegisterReadValues // (rd0, rd1)
+{
+    
+    reg(clk) r0: uint<32> reset(rst: 0) = write_mux(0, r0, wr0, wr1);
+    reg(clk) r1: uint<32> reset(rst: 0) = write_mux(1, r1, wr0, wr1);
+    reg(clk) r2: uint<32> reset(rst: 0) = write_mux(2, r2, wr0, wr1);
+    reg(clk) r3: uint<32> reset(rst: 0) = write_mux(3, r3, wr0, wr1);
+    reg(clk) r4: uint<32> reset(rst: 0) = write_mux(4, r4, wr0, wr1);
+    reg(clk) r5: uint<32> reset(rst: 0) = write_mux(5, r5, wr0, wr1);
+    reg(clk) r6: uint<32> reset(rst: 0) = write_mux(6, r6, wr0, wr1);
+    reg(clk) r7: uint<32> reset(rst: 0) = write_mux(7, r7, wr0, wr1);
+
+    reg(clk) r8: uint<32> reset(rst: 0) = write_mux(8, r8, wr0, wr1);
+    reg(clk) r9: uint<32> reset(rst: 0) = write_mux(9, r9, wr0, wr1);
+    reg(clk) r10: uint<32> reset(rst: 0) = write_mux(10, r10, wr0, wr1);
+    reg(clk) r11: uint<32> reset(rst: 0) = write_mux(11, r11, wr0, wr1);
+    reg(clk) r12: uint<32> reset(rst: 0) = write_mux(12, r12, wr0, wr1);
+    reg(clk) r13: uint<32> reset(rst: 0) = write_mux(13, r13, wr0, wr1);
+    reg(clk) r14: uint<32> reset(rst: 0) = write_mux(14, r14, wr0, wr1);
+    reg(clk) r15: uint<32> reset(rst: 0) = write_mux(15, r15, wr0, wr1);
+
+    // Combinational read muxes
+    let rd0: uint<32> = match ra0 { 
+                            0 => r0, 
+                            1 => r1, 
+                            2 => r2, 
+                            3 => r3, 
+                            4 => r4, 
+                            5 => r5, 
+                            6 => r6, 
+                            7 => r7,
+                            8 => r8, 
+                            9 => r9,
+                            10 => r10, 
+                            11 => r11, 
+                            12 => r12, 
+                            13 => r13, 
+                            14 => r14, 
+                            _ => r15,
+                        };
+
+    let rd1: uint<32> = match ra1 { 
+                            0 => r0, 
+                            1 => r1, 
+                            2 => r2, 
+                            3 => r3, 
+                            4 => r4, 
+                            5 => r5, 
+                            6 => r6, 
+                            7 => r7,
+                            8 => r8, 
+                            9 => r9,
+                            10 => r10, 
+                            11 => r11, 
+                            12 => r12, 
+                            13 => r13, 
+                            14 => r14, 
+                            _ => r15
+                        };
+
+    RegisterReadValues(rd0, rd1)
+}
+
+// Bus helper
+fn route_rf_one(m: Option<Msg>) -> Option<(uint<4>, uint<32>)> {
+    match m {
+        Some(Msg::RF_Write(i, x)) => Some((i, x)),
+        _ => None
+    }
+}
+
+// Helper: choose next value for a given register index with priority wr1 > wr0
+fn write_mux(my_idx: uint<4>,
+                cur: uint<32>,
+                w0: Option<(uint<4>, uint<32>)>,
+                w1: Option<(uint<4>, uint<32>)>) -> uint<32> {
+    match w1 {
+        Some((idx, v)) => if idx == my_idx { v } else {
+            match w0 {
+                Some((idx0, v0)) => if idx0 == my_idx { v0 } else { cur },
+                None => cur
+            }
+        },
+        None => match w0 {
+            Some((idx0, v0)) => if idx0 == my_idx { v0 } else { cur },
+            None => cur
+        }
+    }
+}

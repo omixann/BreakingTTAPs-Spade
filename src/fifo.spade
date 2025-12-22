@@ -1,0 +1,96 @@
+//============================================================
+// FIFO Queue (Depth 8, uint<8>)
+// Ring buffer implementation with zero-latency read (FWFT)
+//============================================================
+
+struct FifoState {
+    mem: [uint<8>; 8],
+    w_ptr: uint<3>,
+    r_ptr: uint<3>,
+    count: uint<4>
+}
+
+fn reset_fifo() -> FifoState {
+    FifoState([0, 0, 0, 0, 0, 0, 0, 0], 0, 0, 0)
+}
+
+// Helper to update a specific index in the array (Functional update)
+fn set_mem(arr: [uint<8>; 8], idx: uint<3>, val: uint<8>) -> [uint<8>; 8] {
+    match idx {
+        0 => [val, arr[1], arr[2], arr[3], arr[4], arr[5], arr[6], arr[7]],
+        1 => [arr[0], val, arr[2], arr[3], arr[4], arr[5], arr[6], arr[7]],
+        2 => [arr[0], arr[1], val, arr[3], arr[4], arr[5], arr[6], arr[7]],
+        3 => [arr[0], arr[1], arr[2], val, arr[4], arr[5], arr[6], arr[7]],
+        4 => [arr[0], arr[1], arr[2], arr[3], val, arr[5], arr[6], arr[7]],
+        5 => [arr[0], arr[1], arr[2], arr[3], arr[4], val, arr[6], arr[7]],
+        6 => [arr[0], arr[1], arr[2], arr[3], arr[4], arr[5], val, arr[7]],
+        7 => [arr[0], arr[1], arr[2], arr[3], arr[4], arr[5], arr[6], val]
+    }
+}
+
+struct FifoOut {
+    full: bool,
+    empty: bool,
+    count: uint<4>,
+    val: Option<uint<8>> // Valid data if !empty
+}
+
+entity fifo_u8(
+    clk: clock,
+    rst: bool,
+    push: Option<uint<8>>, // Some(val) to push
+    pop: bool              // true to pop
+) -> FifoOut
+{
+    reg(clk) s: FifoState reset(rst: reset_fifo()) = {
+        let is_full = s.count == 8;
+        let is_empty = s.count == 0;
+
+        // Determine actions
+        // We only push if not full (or if popping simultaneously)
+        let do_push = match push {
+            Some(_) => !is_full || pop, // Allow push if full AND popping (overwrite/shift logic)
+            None => false
+        };
+        
+        // We only pop if not empty
+        let do_pop = pop && !is_empty;
+
+        // Calculate next pointers and count
+        let next_w = if do_push { trunc(s.w_ptr + 1) } else { s.w_ptr };
+        let next_r = if do_pop  { trunc(s.r_ptr + 1) } else { s.r_ptr };
+        
+        let next_count = match (do_push, do_pop) {
+            (true, false) => trunc(s.count + 1),
+            (false, true) => trunc(s.count - 1),
+            _ => s.count // Both or neither -> count stays same
+        };
+
+        // Update memory
+        let next_mem = match push {
+            Some(val) => if do_push { set_mem(s.mem, s.w_ptr, val) } else { s.mem },
+            None => s.mem
+        };
+
+        FifoState(next_mem, next_w, next_r, next_count)
+    };
+
+    // Output Logic (Combinational)
+    let empty = s.count == 0;
+    let full  = s.count == 8;
+    
+    // Data at read pointer is always available (Zero Latency / FWFT)
+    let out_val = if !empty {
+        // Access array at read pointer
+        // Spade array indexing is constant-time for register arrays
+        let val = match s.r_ptr {
+            0 => s.mem[0], 1 => s.mem[1], 2 => s.mem[2], 3 => s.mem[3],
+            4 => s.mem[4], 5 => s.mem[5], 6 => s.mem[6], 7 => s.mem[7]
+        };
+        Some(val)
+    } else {
+        None
+    };
+
+    FifoOut(full, empty, s.count, out_val)
+}

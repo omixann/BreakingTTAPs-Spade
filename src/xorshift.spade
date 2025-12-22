@@ -1,0 +1,63 @@
+use tta::tta::Msg;
+
+//============================================================
+// Xorshift32 Pseudo-Random Number Generator
+// - Continuous generation (1 value per cycle)
+// - trig=Some(seed) to reseed the generator
+// - trig=None to continue generating from current state
+// - Latency: 1 cycle
+//============================================================
+
+fn next_xorshift32(x: uint<32>) -> uint<32> {
+    // Algorithm:
+    // x ^= x << 13;
+    // x ^= x >> 17;
+    // x ^= x << 5;
+    
+    let x1 = x ^ trunc(x << 13);
+    let x2 = x1 ^ (x1 >> 17);
+    let x3 = x2 ^ trunc(x2 << 5);
+    x3
+}
+
+entity xorshift_fu(
+    clk: clock,
+    rst: bool,
+    trig: Option<uint<32>>      // None or 0 = Step, Some(val)=Reseed & Step
+) -> Option<uint<32>>
+{
+    reg(clk) state: uint<32> reset(rst: 1) = {
+        // Determine base state (Current or New Seed)
+        let base = match trig {
+            Some(v) => if v == 0 { state } else { v },  // value of 0 (i.e. immediate(0)) is same as None
+            None => state
+        };
+
+        // Calculate next step and update register
+        next_xorshift32(base)
+    };
+
+    // Output Register
+    // Always produces Some(value) unless in reset
+    reg(clk) res: Option<uint<32>> reset(rst: None) = {
+        let base = match trig {
+            Some(v) => if v == 0 { state } else { v },  // value of 0 (i.e. immediate(0)) is same as None
+            None => state
+        };
+        Some(next_xorshift32(base))
+    };
+
+    res
+}
+
+// Bus helper
+
+fn pick_xorshift_trig(m0: Option<Msg>, m1: Option<Msg>) -> Option<uint<32>> {
+    match m1 {
+        Some(Msg::Xorshift_Trig(x)) => Some(x),
+        _ => match m0 { 
+            Some(Msg::Xorshift_Trig(x)) => Some(x), 
+            _ => None 
+        }
+    }
+}

@@ -1,0 +1,99 @@
+use tta::tta::Msg;
+
+//============================================================
+// Mul - shift add multiplier FU
+// 
+// - OpA holds multiplicand
+// - Trigger with multiplier.
+// - Latency: 32 Cycles
+// - Output in Mul_Res.
+// - Mul_Res is undefined for all other cycles
+//============================================================
+enum State {
+    Idle,
+    Calc
+}
+
+struct MulRegs {
+    state: State,
+    op_a: uint<32>, // Multiplicand
+    op_b: uint<32>, // Multiplier
+    acc: uint<32>,  // Accumulator
+    cnt: uint<6>    // Cycle counter (0..32)
+}
+
+fn reset_mul() -> MulRegs {
+    MulRegs(State::Idle, 0, 0, 0, 0)
+}
+
+entity mul_shiftadd_fu(
+  clk: clock, rst: bool,
+  set_op_a: Option<uint<32>>,
+  trig:     Option<uint<32>>
+) -> Option<uint<32>>
+{
+    reg(clk) r: MulRegs reset(rst: reset_mul()) = match r.state {
+        State::Idle => {
+            // Update op_a if set_op_a is present, otherwise keep current
+            let next_a = match set_op_a {
+                Some(val) => val,
+                None => r.op_a
+            };
+
+            // If triggered, switch to Calc with A and B
+            // Otherwise, stay in Idle
+            match trig {
+                Some(val_b) => MulRegs(State::Calc, next_a, val_b, 0, 0),
+                None => MulRegs(State::Idle, next_a, 0, 0, 0)
+            }
+        },
+        State::Calc => {
+            // Determine if we add in this cycle (Check LSB of B)
+            let do_add = (r.op_b & 1) == 1;
+            let current_addend = if do_add { r.op_a } else { 0 };
+            let next_acc = trunc(r.acc + current_addend);
+
+            let next_a = r.op_a << 1;
+            let next_b = r.op_b >> 1;
+            
+            if r.cnt == 31 {
+                // Finished 32 bits (0..31). Return to Idle.
+                reset_mul()
+            } else {
+                MulRegs(State::Calc, next_a, next_b, next_acc, trunc(r.cnt + 1))
+            }
+        }
+    };
+
+    // The result is valid ONLY on the final cycle of calculation.
+    match r.state {
+        State::Calc => {
+            if r.cnt == 31 {
+                // Calculate the final accumulator value combinatorially
+                let do_add = (r.op_b & 1) == 1;
+                let current_addend = if do_add { r.op_a } else { 0 };
+                Some(trunc(r.acc + current_addend))
+            } else {
+                None
+            }
+        },
+        _ => None
+    }
+}
+
+
+// Bus helpers
+
+fn pick_mul_seta(m0: Option<Msg>, m1: Option<Msg>) -> Option<uint<32>> {
+  match m1 {
+    Some(Msg::MUL_SetA(x)) => Some(x),
+    _ => match m0 { Some(Msg::MUL_SetA(x)) => Some(x), _ => None }
+  }
+}
+
+fn pick_mul_trig(m0: Option<Msg>, m1: Option<Msg>) -> Option<uint<32>> {
+  match m1 {
+    Some(Msg::MUL_Trig(x)) => Some(x),
+    _ => match m0 { Some(Msg::MUL_Trig(x)) => Some(x), _ => None }
+  }
+}

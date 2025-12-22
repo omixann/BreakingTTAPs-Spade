@@ -1,0 +1,211 @@
+use tta::tta::Msg;
+
+// External macro (Verilog): gf180mcu_fd_ip_sram__sram512x8m8wm1
+// https://gf180mcu-pdk.readthedocs.io/en/latest/IPs/SRAM/gf180mcu_fd_ip_sram/cells/gf180mcu_fd_ip_sram__sram512x8m8wm1/gf180mcu_fd_ip_sram__sram512x8m8wm1.html
+//
+// CLK, CEN_n, GWEN_n, WEN_n[7:0], A[8:0], D[7:0] -> Q[7:0]
+
+#[no_mangle(all)]
+extern entity gf180mcu_fd_ip_sram__sram512x8m8wm1(
+  CLK: clock,
+  CEN: bool,
+  GWEN: bool,
+  WEN: uint<8>,
+  A: uint<9>,
+  D: uint<8>,
+  Q: inv &uint<8>
+);
+
+#[no_mangle(all)]
+extern entity gf180mcu_fd_ip_sram__sram256x8m8wm1(
+  CLK: clock,
+  CEN: bool,
+  GWEN: bool,
+  WEN: uint<8>,
+  A: uint<8>,
+  D: uint<8>,
+  Q: inv &uint<8>
+);
+
+
+// General purpose SRAM
+//
+// 32-bit word facade using four byte-wide macros in parallel
+entity sram_512x32(
+  clk: clock, rst: bool,
+  en: bool,             // Active High Enable
+  addr: uint<16>,
+  we: bool,
+  wdata: uint<32>
+) -> uint<32>
+{
+    // Word index: 512 bytes / 4 = 128 words -> 7 bits; macro takes 9, so zero-extend
+    let word_idx: uint<9> = trunc(addr >> 2);
+
+    // Split write data into little-endian lanes
+    let d0: uint<8> = trunc(wdata      );
+    let d1: uint<8> = trunc(wdata >>  8);
+    let d2: uint<8> = trunc(wdata >> 16);
+    let d3: uint<8> = trunc(wdata >> 24);
+
+    // Control Logic
+    // CEN is Active Low (0=Enabled). 
+
+    // would be nice to use the chip's enable to save power, 
+    // but it requires an extra cycle and too complicated for now
+    // Might be a bug according to community, but we won't risk it for this tapeout
+    //let cen: bool = !en || rst;
+
+    let cen = rst;
+
+
+    let gwen: bool    = if we { false } else { true };    // 0 = write, 1 = read
+    let wen:  uint<8> = if we { 0u8 } else { 0xFFu8 };    // 0 bits write-enabled
+
+    // Four banks for 32-bit width
+    let (qr0, qw0) = port;
+    let (qr1, qw1) = port;
+    let (qr2, qw2) = port;
+    let (qr3, qw3) = port;
+    let _ = inst gf180mcu_fd_ip_sram__sram512x8m8wm1(clk, cen, gwen, wen, word_idx, d0, qw0);
+    let _ = inst gf180mcu_fd_ip_sram__sram512x8m8wm1(clk, cen, gwen, wen, word_idx, d1, qw1);
+    let _ = inst gf180mcu_fd_ip_sram__sram512x8m8wm1(clk, cen, gwen, wen, word_idx, d2, qw2);
+    let _ = inst gf180mcu_fd_ip_sram__sram512x8m8wm1(clk, cen, gwen, wen, word_idx, d3, qw3);
+
+    // Repack little-endian bytes into 32-bit word
+    let q32: uint<32> =
+        (zext(*qr0)      ) |
+        (zext(*qr1) <<  8) |
+        (zext(*qr2) << 16) |
+        (zext(*qr3) << 24);
+
+    q32
+}
+
+// SRAM for stack
+//
+// 32-bit word facade using four byte-wide macros in parallel
+//
+// NOTE: word indexing, not byte
+entity stack_ram_256x32(
+  clk: clock, rst: bool,
+  word_idx: uint<8>,      // NOTE: Word addressed
+  we: bool,
+  wdata: uint<32>
+) -> uint<32>
+{
+
+    // Split write data into little-endian lanes
+    let d0: uint<8> = trunc(wdata      );
+    let d1: uint<8> = trunc(wdata >>  8);
+    let d2: uint<8> = trunc(wdata >> 16);
+    let d3: uint<8> = trunc(wdata >> 24);
+
+    // Active-LOW control signals for the macro
+    let cen:  bool    = rst;               // false = enabled; needs to set true (High) on first clock to activate memory
+    let gwen: bool    = if we { false } else { true };    // 0 = write, 1 = read
+    let wen:  uint<8> = if we { 0u8 } else { 0xFFu8 };    // 0 bits write-enabled
+
+    // Four banks for 32-bit width
+    let (qr0, qw0) = port;
+    let (qr1, qw1) = port;
+    let (qr2, qw2) = port;
+    let (qr3, qw3) = port;
+    let _ = inst gf180mcu_fd_ip_sram__sram256x8m8wm1(clk, cen, gwen, wen, word_idx, d0, qw0);
+    let _ = inst gf180mcu_fd_ip_sram__sram256x8m8wm1(clk, cen, gwen, wen, word_idx, d1, qw1);
+    let _ = inst gf180mcu_fd_ip_sram__sram256x8m8wm1(clk, cen, gwen, wen, word_idx, d2, qw2);
+    let _ = inst gf180mcu_fd_ip_sram__sram256x8m8wm1(clk, cen, gwen, wen, word_idx, d3, qw3);
+
+    // Repack little-endian bytes into 32-bit word
+    let q32: uint<32> =
+        (zext(*qr0)      ) |
+        (zext(*qr1) <<  8) |
+        (zext(*qr2) << 16) |
+        (zext(*qr3) << 24);
+
+    q32
+}
+
+// SRAM for the IMEM. 
+//
+// This can probably be unified with sram above, but it doesn't have the same word indexing
+// stuff. Not sure it's needed above but running out of time sooooo
+//
+// NOTE: word indexing, not byte
+entity iram_512x32(
+  clk: clock, rst: bool,
+  en: bool,             // Active High Enable
+  addr: uint<9>,        // NOTE: word indexing, not byte
+  we: bool,
+  wdata: uint<32>
+) -> uint<32>
+{
+
+    // Split write data into little-endian lanes
+    let d0: uint<8> = trunc(wdata      );
+    let d1: uint<8> = trunc(wdata >>  8);
+    let d2: uint<8> = trunc(wdata >> 16);
+    let d3: uint<8> = trunc(wdata >> 24);
+
+    // Active-LOW control signals for the macro
+
+    // CEN is Active Low (0=Enabled). 
+    //let cen: bool = !en || rst;
+
+    // would be nice to use the chip's enable to save power, 
+    // but it requires an extra cycle and too complicated for now
+    let cen = rst;  
+
+    let gwen: bool    = if we { false } else { true };    // 0 = write, 1 = read
+    let wen:  uint<8> = if we { 0u8 } else { 0xFFu8 };    // 0 bits write-enabled
+
+    // Four banks for 32-bit width
+    let (qr0, qw0) = port;
+    let (qr1, qw1) = port;
+    let (qr2, qw2) = port;
+    let (qr3, qw3) = port;
+    let _ = inst gf180mcu_fd_ip_sram__sram512x8m8wm1(clk, cen, gwen, wen, addr, d0, qw0);
+    let _ = inst gf180mcu_fd_ip_sram__sram512x8m8wm1(clk, cen, gwen, wen, addr, d1, qw1);
+    let _ = inst gf180mcu_fd_ip_sram__sram512x8m8wm1(clk, cen, gwen, wen, addr, d2, qw2);
+    let _ = inst gf180mcu_fd_ip_sram__sram512x8m8wm1(clk, cen, gwen, wen, addr, d3, qw3);
+
+    // Repack little-endian bytes into 32-bit word
+    let q32: uint<32> =
+        (zext(*qr0)      ) |
+        (zext(*qr1) <<  8) |
+        (zext(*qr2) << 16) |
+        (zext(*qr3) << 24);
+
+    q32
+}
+
+
+// SRAM for imem
+entity iram_1024x32(
+  clk: clock, rst: bool,
+  addr: uint<10>,
+  we: bool,
+  wdata: uint<32>
+) -> uint<32>
+{
+    let index: uint<9> = trunc(addr);
+    let bank: uint<1> = if addr < 512 { 0 } else { 1 };
+
+    // Select Enable
+    let en0 = bank == 0;
+    let en1 = bank == 1;
+
+    // Write Enable
+    let we0 = we && en0;
+    let we1 = we && en1;
+
+    // Instantiate with explicit Enables (bank not being used will be powered down)  
+    let rdata0 = inst iram_512x32(clk, rst, en0, index, we0, wdata);
+    let rdata1 = inst iram_512x32(clk, rst, en1, index, we1, wdata);
+
+    // Output Mux (Latched Bank Selection)
+    // reads arrive a cycle later, so we need to know the bank from *last* request
+    reg(clk) bank_d: uint<1> reset(rst: 0) = bank;
+
+    if bank_d == 0 { rdata0 } else { rdata1 }
+}
