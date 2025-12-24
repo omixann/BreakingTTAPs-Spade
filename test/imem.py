@@ -590,3 +590,122 @@ async def test_imem_tokens_unique(dut):
 
     dst_map = parse_match_arms(content, "decode_dst_tok")
     check_uniqueness("Dest", dst_map)
+
+
+def parse_enum_variants(spade_content, enum_name):
+    """
+    Parse an enum definition from Spade source and extract all variant names.
+    Handles both simple variants (e.g., ALU_Res) and parameterized variants
+    (e.g., RegisterFile{idx: uint<4>}).
+    """
+    pattern = rf'enum\s+{enum_name}\s*\{{'
+    match = re.search(pattern, spade_content)
+    if not match:
+        raise ValueError(f"Could not find enum {enum_name}")
+
+    start = match.end()
+    brace_count = 1
+    end = start
+    while brace_count > 0 and end < len(spade_content):
+        if spade_content[end] == '{':
+            brace_count += 1
+        elif spade_content[end] == '}':
+            brace_count -= 1
+        end += 1
+
+    enum_body = spade_content[start:end-1]
+    variant_pattern = r'^\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?:\{[^}]*\})?\s*,?\s*(?://.*)?$'
+    variants = []
+    for line in enum_body.split('\n'):
+        line = line.strip()
+        if not line or line.startswith('//'):
+            continue
+        m = re.match(variant_pattern, line)
+        if m:
+            variants.append(m.group(1))
+    return variants
+
+
+def get_mapped_variants_from_mappings(mappings):
+    """
+    Extract unique variant names from token mappings.
+    mappings is a list of (token_id, target_str) tuples.
+    Returns a set of variant names (e.g., 'ALU_Res', 'RegisterFile').
+    """
+    variants = set()
+    for _, target in mappings:
+        # Extract variant name from "Src::VariantName" or "Dst::VariantName(args)"
+        m = re.match(r'(?:Src|Dst)::([A-Za-z_][A-Za-z0-9_]*)', target)
+        if m:
+            variants.add(m.group(1))
+    return variants
+
+
+@cocotb.test()
+async def test_enum_coverage(dut):
+    """
+    Verify that all Src and Dst enum variants defined in tta.spade
+    have corresponding token mappings in imem.spade.
+
+    This is critical: if a variant has no token mapping, the instruction
+    cannot be encoded and will not work in the final processor!
+    """
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+
+    # Load tta.spade for enum definitions
+    tta_file = os.path.join(current_dir, "../../src/tta.spade")
+    if not os.path.exists(tta_file):
+        assert False, f"File {tta_file} not found."
+    with open(tta_file, 'r') as f:
+        tta_content = f.read()
+
+    # Load imem.spade for token mappings
+    imem_file = os.path.join(current_dir, "../../src/imem.spade")
+    if not os.path.exists(imem_file):
+        assert False, f"File {imem_file} not found."
+    with open(imem_file, 'r') as f:
+        imem_content = f.read()
+
+    # Parse enum variants from tta.spade
+    src_variants = set(parse_enum_variants(tta_content, "Src"))
+    dst_variants = set(parse_enum_variants(tta_content, "Dst"))
+
+    # Parse token mappings from imem.spade
+    src_mappings = parse_match_arms(imem_content, "decode_src_tok")
+    dst_mappings = parse_match_arms(imem_content, "decode_dst_tok")
+
+    src_mapped = get_mapped_variants_from_mappings(src_mappings)
+    dst_mapped = get_mapped_variants_from_mappings(dst_mappings)
+
+    # Check for missing Src mappings
+    missing_src = src_variants - src_mapped
+    if missing_src:
+        print(f"\nFAIL: The following Src enum variants have NO token mapping:")
+        for v in sorted(missing_src):
+            print(f"  - {v}")
+        print("\nThese instructions cannot be encoded in the final processor!")
+    else:
+        print(f"\nPASS: All {len(src_variants)} Src enum variants have token mappings.")
+
+    # Check for missing Dst mappings
+    missing_dst = dst_variants - dst_mapped
+    if missing_dst:
+        print(f"\nFAIL: The following Dst enum variants have NO token mapping:")
+        for v in sorted(missing_dst):
+            print(f"  - {v}")
+        print("\nThese instructions cannot be encoded in the final processor!")
+    else:
+        print(f"\nPASS: All {len(dst_variants)} Dst enum variants have token mappings.")
+
+    # Check for phantom mappings (mappings to variants that don't exist)
+    extra_src = src_mapped - src_variants
+    if extra_src:
+        print(f"\nWARNING: These Src mappings reference non-existent variants: {sorted(extra_src)}")
+
+    extra_dst = dst_mapped - dst_variants
+    if extra_dst:
+        print(f"\nWARNING: These Dst mappings reference non-existent variants: {sorted(extra_dst)}")
+
+    # Fail the test if any coverage is missing
+    assert not missing_src, f"Missing Src token mappings: {sorted(missing_src)}"
+    assert not missing_dst, f"Missing Dst token mappings: {sorted(missing_dst)}"

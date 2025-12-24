@@ -311,7 +311,7 @@ struct TTA_Tick {
     lsu_load: Option<uint<32>>,
     instruction: Option<Instr>,
     gpo16: uint<16>,
-    state: StateDebug,
+    //state: StateDebug,
 }
 
 entity tta(clk: clock, 
@@ -611,6 +611,7 @@ entity tta(clk: clock,
     let r14 = registry.r14;
     let r15 = registry.r15;
 
+    /*
     let state = StateDebug $(
         rf_w0, rf_w1, 
         r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14, r15,
@@ -635,6 +636,7 @@ entity tta(clk: clock,
         spi_out8_trig, spi_inpop_trig,
         uart_out8_trig, uart_inpop_trig,
     );
+    */
 
     TTA_Tick(
         pc_val,
@@ -652,7 +654,7 @@ entity tta(clk: clock,
         lsu_load_trig,
         Some(insn),
         gpo_res,
-        state
+        //state
     )
 }
 

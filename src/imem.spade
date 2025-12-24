@@ -93,8 +93,10 @@ fn decode_dst_tok(t: uint<8>) -> Dst {
         06u8 => Dst::RegisterFile(6u4),
         07u8 => Dst::RegisterFile(7u4),
 
-        //08u8 =>     // UNUSED
-        //09u8 =>     // UNUSED
+        // Jump if true
+        // Missing mappings from v1.0
+        08u8 => Dst::BT_Target,
+        09u8 => Dst::BT_Trig,
 
         // ALU
         10u8 => Dst::ALU_OpA,
@@ -207,6 +209,11 @@ fn decode_dst_tok(t: uint<8>) -> Dst {
 
         78u8 => Dst::UART_InPop_Trig,
         79u8 => Dst::SPI_InPop_Trig,
+
+        // Missing mappings from v1.0
+        80u8 => Dst::ALU_Xor_Trig,
+        81u8 => Dst::BIT_Bclr_Trig,
+        82u8 => Dst::Cmp_OpA,
 
         100u8 => Dst::RegisterFile(8u4),
         101u8 => Dst::RegisterFile(9u4),
