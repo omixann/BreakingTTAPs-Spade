@@ -310,31 +310,9 @@ struct TTA_Tick {
     lsu_store: Option<uint<32>>,
     lsu_load: Option<uint<32>>,
     instruction: Option<Instr>,
-    gpo16: uint<16>
+    gpo16: uint<16>,
+    state: StateDebug,
 }
-
-fn empty_tick() -> TTA_Tick {
-    TTA_Tick(
-        0,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        0,
-        0,
-        None,
-        None,
-        None,
-        None,
-        None,
-        0
-    )
-}
-
-
-
 
 entity tta(clk: clock, 
     rst: bool, 
@@ -346,7 +324,7 @@ entity tta(clk: clock,
     uart_tx_busy: bool,
     spi_miso: Option<uint<8>>,
     spi_mosi: inv &Option<uint<8>>,
-    spi_busy: bool
+    spi_busy: bool,
 ) -> TTA_Tick
 {
     // Note: All the declared values are registered elsewhere
@@ -615,6 +593,49 @@ entity tta(clk: clock,
     let rd0          = registry.rd0;
     let rd1          = registry.rd1;
 
+    // debug
+    let r0 = registry.r0;
+    let r1 = registry.r1;
+    let r2 = registry.r2;
+    let r3 = registry.r3;
+    let r4 = registry.r4;
+    let r5 = registry.r5;
+    let r6 = registry.r6;
+    let r7 = registry.r7;
+    let r8 = registry.r8;
+    let r9 = registry.r9;
+    let r10 = registry.r10;
+    let r11 = registry.r11;
+    let r12 = registry.r12;
+    let r13 = registry.r13;
+    let r14 = registry.r14;
+    let r15 = registry.r15;
+
+    let state = StateDebug $(
+        rf_w0, rf_w1, 
+        r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14, r15,
+
+        alu_op_a, alu_trig, alu_res,
+        bit_op_a, bit_trig, bit_res,
+        lalu_op_a, lalu_trig, lalu_res,
+        mul_set_addr, mul_trig, mul_res,
+        div_set_addr, div_trig, div_res,
+        cmp_op_a, cmp_trig, cmp_res,
+        cmpz_trig, cmpz_res,
+        pc_jump_final, bt_target, bt_trig,
+        lsu_set_addr, lsu_load_trig, lsu_store_trig, lsu_res,
+        lsu2_set_addr, lsu2_load_trig, lsu2_store_trig, lsu2_res,
+        xorshift_trig, xorshift_res,
+        tanh_trig, tanh_res,
+        mac_set_addr, mac_trig, mac_clear, mac_res,
+        sel_cond, sel_seta, sel_trigb, sel_res,
+        mda_base, mda_mask, mda_ptr, mda_trig, mda_res,
+        stack_setaddr, stack_push, stack_pop, stack_res,
+        gpo_trig,
+        spi_out8_trig, spi_inpop_trig,
+        uart_out8_trig, uart_inpop_trig,
+    );
+
     TTA_Tick(
         pc_val,
         alu_op_a,
@@ -630,6 +651,121 @@ entity tta(clk: clock,
         lsu_store_trig,
         lsu_load_trig,
         Some(insn),
-        gpo_res
+        gpo_res,
+        state
     )
+}
+
+struct StateDebug {
+    // Register File
+    rf_w0: Option<(uint<4>, uint<32>)>,
+    rf_w1: Option<(uint<4>, uint<32>)>,
+    r0: uint<32>,
+    r1: uint<32>,
+    r2: uint<32>,
+    r3: uint<32>,
+    r4: uint<32>,
+    r5: uint<32>,
+    r6: uint<32>,
+    r7: uint<32>,
+    r8: uint<32>,
+    r9: uint<32>,
+    r10: uint<32>,
+    r11: uint<32>,
+    r12: uint<32>,
+    r13: uint<32>,
+    r14: uint<32>,
+    r15: uint<32>,
+
+    // ALU
+    alu_op_a: Option<uint<32>>,
+    alu_trig: Option<(AluOp, uint<32>)>,
+    alu_res: Option<uint<32>>,
+
+    // BIT
+    bit_op_a: Option<uint<32>>,
+    bit_trig: Option<(BitOp, uint<32>)>,
+    bit_res: Option<uint<32>>,
+
+    // Logic ALU
+    lalu_op_a: Option<uint<32>>,
+    lalu_trig: Option<(LAluOp, uint<32>)>,
+    lalu_res: Option<uint<32>>,
+
+    // Multiply
+    mul_set_addr: Option<uint<32>>,
+    mul_trig: Option<uint<32>>,
+    mul_res: Option<uint<32>>,
+
+    // Divide
+    div_set_addr: Option<uint<32>>,
+    div_trig: Option<uint<32>>,
+    div_res: Option<uint<32>>,
+
+    // Compare
+    cmp_op_a: Option<uint<32>>,
+    cmp_trig: Option<(CmpOp, uint<32>)>,
+    cmp_res: Option<uint<32>>,
+
+    // Compare Zero
+    cmpz_trig: Option<(CmpzOp, uint<32>)>,
+    cmpz_res: Option<uint<32>>,
+
+    // Control Flow
+    pc_jump_final: Option<uint<10>>,
+    bt_target: Option<uint<10>>,
+    bt_trig: Option<uint<32>>,
+
+    // LSU 1
+    lsu_set_addr: Option<uint<32>>,
+    lsu_load_trig: Option<uint<32>>,
+    lsu_store_trig: Option<uint<32>>,
+    lsu_res: Option<uint<32>>,
+
+    // LSU 2
+    lsu2_set_addr: Option<uint<32>>,
+    lsu2_load_trig: Option<uint<32>>,
+    lsu2_store_trig: Option<uint<32>>,
+    lsu2_res: Option<uint<32>>,
+
+    // Misc Units
+    xorshift_trig: Option<uint<32>>,
+    xorshift_res: Option<uint<32>>,
+
+    tanh_trig: Option<uint<32>>,
+    tanh_res: Option<uint<32>>,
+
+    // MAC
+    mac_set_addr: Option<uint<32>>,
+    mac_trig: Option<uint<32>>,
+    mac_clear: bool,
+    mac_res: Option<uint<32>>,
+
+    // Select
+    sel_cond: Option<bool>,
+    sel_seta: Option<uint<32>>,
+    sel_trigb: Option<uint<32>>,
+    sel_res: Option<uint<32>>,
+
+    // ModAdd
+    mda_base: Option<uint<32>>,
+    mda_mask: Option<uint<32>>,
+    mda_ptr: Option<uint<32>>,
+    mda_trig: Option<uint<32>>,
+    mda_res: Option<uint<32>>,
+
+    // Stack
+    stack_setaddr: Option<uint<32>>,
+    stack_push: Option<uint<32>>,
+    stack_pop: bool,
+    stack_res: Option<uint<32>>,
+
+    // IO
+    gpo_trig: Option<uint<16>>,
+    
+    spi_out8_trig: Option<uint<8>>,
+    spi_inpop_trig: bool,
+
+    uart_out8_trig: Option<uint<8>>,
+    uart_inpop_trig: bool,
 }

@@ -9,7 +9,25 @@ use tta::tta::Msg;
 
 struct RegisterReadValues {
     rd0: uint<32>,
-    rd1: uint<32>
+    rd1: uint<32>,
+
+    // debug
+    r0: uint<32>,
+    r1: uint<32>,
+    r2: uint<32>,
+    r3: uint<32>,
+    r4: uint<32>,
+    r5: uint<32>,
+    r6: uint<32>,
+    r7: uint<32>,
+    r8: uint<32>,
+    r9: uint<32>,
+    r10: uint<32>,
+    r11: uint<32>,
+    r12: uint<32>,
+    r13: uint<32>,
+    r14: uint<32>,
+    r15: uint<32>,
 }
 
 entity regfile8_fu(
@@ -79,7 +97,7 @@ entity regfile8_fu(
                             _ => r15
                         };
 
-    RegisterReadValues(rd0, rd1)
+    RegisterReadValues(rd0, rd1, r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14, r15)
 }
 
 // Bus helper

@@ -24,20 +24,18 @@ repeat N {
   u32 slot0_word;   // little-endian
   u32 slot1_word;   // little-endian
 }
-
+*/
 
 //============================================================
 //State machine
 //============================================================
-WaitB → WaitT → Ver0 → Ver1 → N0 → N1 → E0 → E1
-                                      │
-                                      └── if N==0 → Done
-E1 → W0_B0 → W0_B1 → W0_B2 → W0_B3 → W1_B0 → W1_B1 → W1_B2 → W1_B3 → Commit
-                                                                         │
-                                                                         └── if more → W0_B0
-                                                                         └── else     Done
-
-*/
+//WaitB → WaitT → Ver0 → Ver1 → N0 → N1 → E0 → E1
+//                                      │
+//                                      └── if N==0 → Done
+//E1 → W0_B0 → W0_B1 → W0_B2 → W0_B3 → W1_B0 → W1_B1 → W1_B2 → W1_B3 → Commit
+//                                                                         │
+//                                                                         └── if more → W0_B0
+//                                                                        └── else     Done
 
 struct State {
     step: BL,         // current state machine step
