@@ -917,7 +917,142 @@ async def test_ussub(dut):
     s.i.set_op_a = "Some(100)"
     s.i.trig = "None"
     await FallingEdge(dut.clk)
-    
+
     s.i.trig = "Some((AluOp::USsub, 200))"
     await FallingEdge(dut.clk)
     s.o.assert_eq("Some(0)")
+
+
+# ------------ Shift Amount Masking Tests (shifts >= 32) ------------
+
+@cocotb.test()
+async def test_shl_amount_masked(dut):
+    """Shift left by amounts >= 32 should be masked to 5 bits (mod 32)."""
+    await start_clock(dut.clk)
+    s = await reset_dut(dut)
+
+    # A = 0x0000_0001
+    s.i.set_op_a = "Some(1)"
+    s.i.trig = "None"
+    await FallingEdge(dut.clk)
+
+    # << 32 should equal << 0 (no shift)
+    s.i.trig = "Some((AluOp::Shl, 32))"
+    await FallingEdge(dut.clk)
+    s.o.assert_eq("Some(1)")  # 1 << 0 = 1
+    s.i.trig = "None"
+    await FallingEdge(dut.clk)
+
+    # << 33 should equal << 1
+    s.i.trig = "Some((AluOp::Shl, 33))"
+    await FallingEdge(dut.clk)
+    s.o.assert_eq("Some(2)")  # 1 << 1 = 2
+    s.i.trig = "None"
+    await FallingEdge(dut.clk)
+
+    # << 64 should equal << 0
+    s.i.trig = "Some((AluOp::Shl, 64))"
+    await FallingEdge(dut.clk)
+    s.o.assert_eq("Some(1)")  # 1 << 0 = 1
+    s.i.trig = "None"
+    await FallingEdge(dut.clk)
+
+@cocotb.test()
+async def test_shr_amount_masked(dut):
+    """Shift right by amounts >= 32 should be masked to 5 bits (mod 32)."""
+    await start_clock(dut.clk)
+    s = await reset_dut(dut)
+
+    # A = 0x8000_0000
+    s.i.set_op_a = "Some(2147483648)"
+    s.i.trig = "None"
+    await FallingEdge(dut.clk)
+
+    # >> 32 should equal >> 0 (no shift)
+    s.i.trig = "Some((AluOp::Shr, 32))"
+    await FallingEdge(dut.clk)
+    s.o.assert_eq("Some(2147483648)")  # unchanged
+    s.i.trig = "None"
+    await FallingEdge(dut.clk)
+
+    # >> 33 should equal >> 1
+    s.i.trig = "Some((AluOp::Shr, 33))"
+    await FallingEdge(dut.clk)
+    s.o.assert_eq("Some(1073741824)")  # 0x40000000
+    s.i.trig = "None"
+    await FallingEdge(dut.clk)
+
+@cocotb.test()
+async def test_ashr_amount_masked(dut):
+    """Arithmetic shift right by amounts >= 32 should be masked to 5 bits."""
+    await start_clock(dut.clk)
+    s = await reset_dut(dut)
+
+    # A = 0x8000_0000 (negative)
+    s.i.set_op_a = "Some(2147483648)"
+    s.i.trig = "None"
+    await FallingEdge(dut.clk)
+
+    # >> 32 should equal >> 0 (no shift)
+    s.i.trig = "Some((AluOp::Ashr, 32))"
+    await FallingEdge(dut.clk)
+    s.o.assert_eq("Some(2147483648)")  # unchanged
+    s.i.trig = "None"
+    await FallingEdge(dut.clk)
+
+    # >> 33 should equal >> 1 (sign extended)
+    s.i.trig = "Some((AluOp::Ashr, 33))"
+    await FallingEdge(dut.clk)
+    s.o.assert_eq("Some(3221225472)")  # 0xC0000000
+    s.i.trig = "None"
+    await FallingEdge(dut.clk)
+
+@cocotb.test()
+async def test_rotl_amount_masked(dut):
+    """Rotate left by amounts >= 32 should be masked to 5 bits."""
+    await start_clock(dut.clk)
+    s = await reset_dut(dut)
+
+    # A = 0x8000_0001
+    s.i.set_op_a = "Some(2147483649)"
+    s.i.trig = "None"
+    await FallingEdge(dut.clk)
+
+    # rotl 32 should equal rotl 0 (no rotation)
+    s.i.trig = "Some((AluOp::Rotl, 32))"
+    await FallingEdge(dut.clk)
+    s.o.assert_eq("Some(2147483649)")  # unchanged
+    s.i.trig = "None"
+    await FallingEdge(dut.clk)
+
+    # rotl 33 should equal rotl 1
+    s.i.trig = "Some((AluOp::Rotl, 33))"
+    await FallingEdge(dut.clk)
+    s.o.assert_eq("Some(3)")  # same as rotl 1
+    s.i.trig = "None"
+    await FallingEdge(dut.clk)
+
+@cocotb.test()
+async def test_rotr_amount_masked(dut):
+    """Rotate right by amounts >= 32 should be masked to 5 bits."""
+    await start_clock(dut.clk)
+    s = await reset_dut(dut)
+
+    # A = 0x8000_0001
+    s.i.set_op_a = "Some(2147483649)"
+    s.i.trig = "None"
+    await FallingEdge(dut.clk)
+
+    # rotr 32 should equal rotr 0 (no rotation)
+    s.i.trig = "Some((AluOp::Rotr, 32))"
+    await FallingEdge(dut.clk)
+    s.o.assert_eq("Some(2147483649)")  # unchanged
+    s.i.trig = "None"
+    await FallingEdge(dut.clk)
+
+    # rotr 33 should equal rotr 1
+    s.i.trig = "Some((AluOp::Rotr, 33))"
+    await FallingEdge(dut.clk)
+    s.o.assert_eq("Some(3221225472)")  # 0xC0000000, same as rotr 1
+    s.i.trig = "None"
+    await FallingEdge(dut.clk)

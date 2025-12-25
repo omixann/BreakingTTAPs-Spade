@@ -709,3 +709,85 @@ async def test_enum_coverage(dut):
     # Fail the test if any coverage is missing
     assert not missing_src, f"Missing Src token mappings: {sorted(missing_src)}"
     assert not missing_dst, f"Missing Dst token mappings: {sorted(missing_dst)}"
+
+
+@cocotb.test()
+async def test_bank_boundary_fetch(dut):
+    """
+    Test fetching instructions across the SRAM bank boundary (addr 511 -> 512).
+
+    The iram_1024x32 uses two 512-word banks:
+    - Bank 0: addresses 0-511
+    - Bank 1: addresses 512-1023
+
+    The bank_d register latches the previous bank selection for the output mux.
+    This test verifies that sequential fetches across the boundary work correctly.
+    """
+    global Src
+    global Dst
+    setup_token_maps()
+
+    await start_clock(dut.clk)
+    s = await reset_dut(dut)
+
+    # Write instructions at addresses around the bank boundary
+    # Each instruction has a unique immediate value matching its address for easy verification
+    test_addrs = [509, 510, 511, 512, 513, 514]
+    moves = {}
+
+    for addr in test_addrs:
+        # Move0: Immediate(addr) -> ALU_OpA (encodes the address for verification)
+        # Move1: RegisterFile(addr & 7) -> ALU_Add_Trig
+        m0 = (1, Src.Immediate, Dst.ALU_OpA, addr)
+        m1 = (0, Src.RegisterFile(addr & 7), Dst.ALU_Add_Trig, 0)
+        moves[addr] = (m0, m1)
+        await write_instr(s, dut.clk, addr, pack_move(*m0), pack_move(*m1))
+
+    # Switch to run mode
+    s.i.boot_mode = False
+    s.i.wr_addr = "None"
+    s.i.wr_slot0 = "None"
+    s.i.wr_slot1 = "None"
+
+    # Fetch each address and verify - this exercises the bank boundary
+    for addr in test_addrs:
+        s.i.fetch_pc = addr
+        await FallingEdge(dut.clk)
+        await FallingEdge(dut.clk)  # One cycle latency for read
+
+        expected = fmt_instr(moves[addr][0], moves[addr][1])
+        s.o.assert_eq(expected)
+
+    # Test sequential fetch across boundary with proper timing
+    # Based on existing test patterns: fetch_pc set, then 2 cycles, then check
+    # This ensures the bank transition from 511->512 works correctly
+
+    s.i.fetch_pc = 509
+    await FallingEdge(dut.clk)
+    await FallingEdge(dut.clk)
+    s.o.assert_eq(fmt_instr(moves[509][0], moves[509][1]))
+
+    s.i.fetch_pc = 510
+    await FallingEdge(dut.clk)
+    await FallingEdge(dut.clk)
+    s.o.assert_eq(fmt_instr(moves[510][0], moves[510][1]))
+
+    s.i.fetch_pc = 511  # Last address in bank 0
+    await FallingEdge(dut.clk)
+    await FallingEdge(dut.clk)
+    s.o.assert_eq(fmt_instr(moves[511][0], moves[511][1]))
+
+    s.i.fetch_pc = 512  # First address in bank 1 - THE CRITICAL TRANSITION
+    await FallingEdge(dut.clk)
+    await FallingEdge(dut.clk)
+    s.o.assert_eq(fmt_instr(moves[512][0], moves[512][1]))
+
+    s.i.fetch_pc = 513
+    await FallingEdge(dut.clk)
+    await FallingEdge(dut.clk)
+    s.o.assert_eq(fmt_instr(moves[513][0], moves[513][1]))
+
+    s.i.fetch_pc = 514
+    await FallingEdge(dut.clk)
+    await FallingEdge(dut.clk)
+    s.o.assert_eq(fmt_instr(moves[514][0], moves[514][1]))

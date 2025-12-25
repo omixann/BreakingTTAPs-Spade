@@ -34,11 +34,11 @@ entity alu_fu(
         Some((AluOp::Or,  b)) => Some(op_a | b),
         Some((AluOp::Not,  b)) => Some(~b),
         Some((AluOp::Xor, b)) => Some(op_a ^ b),
-        Some((AluOp::Shl, b)) => Some(trunc(op_a << b)),
-        Some((AluOp::Shr, b)) => Some(trunc(op_a >> b)),
-        Some((AluOp::Ashr, b)) => Some(ashr32(op_a, b)),
-        Some((AluOp::Rotl, b)) => Some(rotl32(op_a, b)),
-        Some((AluOp::Rotr, b)) => Some(rotr32(op_a, b)),
+        Some((AluOp::Shl, b)) => { let sh: uint<32> = trunc(b) & 0x1F; Some(trunc(op_a << sh)) },
+        Some((AluOp::Shr, b)) => { let sh: uint<32> = trunc(b) & 0x1F; Some(trunc(op_a >> sh)) },
+        Some((AluOp::Ashr, b)) => { let sh: uint<5> = trunc(b); Some(ashr32(op_a, sh)) },
+        Some((AluOp::Rotl, b)) => { let sh: uint<5> = trunc(b); Some(rotl32(op_a, sh)) },
+        Some((AluOp::Rotr, b)) => { let sh: uint<5> = trunc(b); Some(rotr32(op_a, sh)) },
 
         // Min / Max (Unsigned)
         Some((AluOp::Min, b)) => Some(if op_a < b { op_a } else { b }),
@@ -134,18 +134,21 @@ fn ssub32(a_u: uint<32>, b_u: uint<32>) -> uint<32> {
 
 
 // 32-bit arithmetic SHIFT RIGHT by a variable amount (ASR)
-fn ashr32(x: uint<32>, sh: uint<32>) -> uint<32> {
-    let sh32: uint<32> = sh;
+// sh is masked to 5 bits (0-31) at call site
+fn ashr32(x: uint<32>, sh: uint<5>) -> uint<32> {
+    let sh32: uint<32> = zext(sh);
     let logical: uint<32> = x >> sh32;
     let sign1: uint<1> = trunc(x >> 31);
     let signmask: uint<32> = 0 - zext(sign1);
-    let top_mask: uint<32> = if (sh == 0) { 0 } else { trunc((0 - 1) << (32 - sh) ) };
+    let top_mask: uint<32> = if (sh == 0) { 0 } else { trunc((0 - 1) << (32 - sh32) ) };
     let fill: uint<32> = signmask & top_mask;
     logical | fill
 }
 
-fn rotl32(x: uint<32>, sh32: uint<32>) -> uint<32> {
-  if (sh32 == 0) { x } else {
+// sh is masked to 5 bits (0-31) at call site
+fn rotl32(x: uint<32>, sh: uint<5>) -> uint<32> {
+  let sh32: uint<32> = zext(sh);
+  if (sh == 0) { x } else {
     let left: uint<32> = x << sh32;
     let inverted: uint<32> = trunc(32 - sh32);
     let right: uint<32> = x >> inverted;
@@ -153,8 +156,10 @@ fn rotl32(x: uint<32>, sh32: uint<32>) -> uint<32> {
   }
 }
 
-fn rotr32(x: uint<32>, sh32: uint<32>) -> uint<32> {
-  if (sh32 == 0) { x } else {
+// sh is masked to 5 bits (0-31) at call site
+fn rotr32(x: uint<32>, sh: uint<5>) -> uint<32> {
+  let sh32: uint<32> = zext(sh);
+  if (sh == 0) { x } else {
     let right: uint<32> = x >> sh32;
     let inverted: uint<32> = trunc(32 - sh32);
     let left : uint<32> = x << inverted;
