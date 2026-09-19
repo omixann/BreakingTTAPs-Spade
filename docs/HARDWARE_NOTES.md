@@ -2,6 +2,8 @@
 
 This document describes hardware behaviors that programmers and compiler authors must account for when targeting this TTA architecture.
 
+NOTE: this document needs to be audited, I'm not sure it's current anymore (especially after the last-minute Christmas bug fix). The rest of the instructions need to be documented too. Will update soon!
+
 ---
 
 ## Table of Contents
